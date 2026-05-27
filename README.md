@@ -1,13 +1,10 @@
 # TraceGraph
 
 > A test tells you whether an assertion passed.
+
 > TraceGraph shows you what the code actually did.
 
-TraceGraph exists to help teams ship software with stronger runtime evidence, better code review, and more confidence in the AI-assisted software development era.
-
-TraceGraph captures what your code actually does at runtime, turns execution into an interactive behavior graph, and helps teams detect risky changes before software reaches production.
-
-It is designed for modern development workflows where code is written by humans, AI coding tools, or both, and where passing tests alone may not be enough to know whether a release is safe.
+TraceGraph exists to help teams ship software with stronger runtime evidence, better code review, and more confidence in the AI-assisted software development era. TraceGraph captures what your code actually does at runtime, turns execution into an interactive behavior graph, and helps teams detect risky changes before software reaches production. It is designed for modern development workflows where code is written by humans, AI coding tools, or both, and where passing tests alone may not be enough to know whether a release is safe.
 
 
 ## Why TraceGraph?

@@ -122,11 +122,10 @@ If intentional, approve the new baseline with compensating evidence.
 
 ## Why TraceGraph?
 
-Modern software teams move fast. AI coding tools make teams move even faster. But faster code generation creates a new problem:
+Modern software teams move fast. AI coding tools make teams move even faster. A normal code diff shows what changed in files. A normal test result shows whether assertions passed. But faster code generation creates a new problem:
 
 > How do you know what the generated or changed code actually did when it ran?
 
-A normal code diff shows what changed in files. A normal test result shows whether assertions passed.
 
 TraceGraph helps answer questions like:
 
@@ -172,11 +171,9 @@ TraceGraph is grounded in established computer science ideas:
 * Software verification and validation
 * Observability and distributed tracing
 
-TraceGraph does not claim to formally prove that software is correct for all possible inputs.
+TraceGraph does not formally prove that software is correct for all possible inputs. Instead, it verifies important properties over the executions that were actually observed.
 
-Instead, it verifies important properties over the executions that were actually observed.
-
-In precise terms:
+More precisely:
 
 > TraceGraph constructs a runtime behavior graph from observed execution events and checks graph, temporal, and differential properties against approved semantic baselines.
 
@@ -192,9 +189,7 @@ TraceGraph can verify properties over captured traces, such as:
 * A concurrent scenario did not produce duplicate writes.
 * A PR changed runtime behavior compared with the approved baseline.
 
-TraceGraph does **not** prove universal correctness.
-
-It increases confidence by turning executed tests and scenarios into runtime evidence.
+TraceGraph does **not** prove universal correctness. It increases confidence by turning executed tests and scenarios into runtime evidence.
 
 
 ## Architecture Overview
@@ -250,32 +245,7 @@ TraceGraph
     ├── GitHub Actions
     ├── PR summaries
     ├── Finding approvals
-    ├── Suppressions with evidence
-    └── ProdReady evidence packs
-```
-
-
-## Runtime Behavior Graph
-
-TraceGraph models runtime behavior as a **directed acyclic graph**.
-
-A simple call tree only shows:
-
-```text
-A called B
-B called C
-```
-
-TraceGraph needs to show more:
-
-```text
-A called B
-A caused C
-B and C ran concurrently
-B read resource R
-C wrote resource R
-input.amount flowed into invoice.total
-authorization happened before database write
+    └── Suppressions with evidence
 ```
 
 
@@ -370,11 +340,7 @@ This is important for queues, background jobs, retries, and distributed flows.
 
 ## Semantic Baselines
 
-TraceGraph does not store full raw traces as baselines by default.
-
-Instead, it stores compact semantic baselines.
-
-A baseline records expected behavior such as:
+TraceGraph does not store full raw traces as baselines by default. Instead, it stores compact semantic baselines. A baseline records expected behavior such as:
 
 * Which semantic events occurred
 * Which resources were read or written
@@ -765,9 +731,7 @@ Example scenario:
 
 ## Code Assurance
 
-TraceGraph is especially useful when reviewing AI-generated code.
-
-AI coding tools can produce correct-looking changes that pass tests but still alter important runtime behavior.
+TraceGraph is especially useful when reviewing AI-generated code. AI coding tools can produce correct-looking changes that pass tests but still alter important runtime behavior.
 
 TraceGraph helps reviewers see:
 

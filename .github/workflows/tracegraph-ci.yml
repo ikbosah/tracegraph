@@ -1,303 +1,37 @@
-# TraceGraph Multi-Language Runtime Assurance CI
-#
-# Three-job workflow for projects with both TypeScript/Node and Laravel/PHP.
-# For single-language projects, remove the unused trace job and simplify
-# the merge step to run tracegraph compare directly (no bundle merge needed).
-#
-# Required repository secrets / variables:
-#   None for community tier (basic CI is free and open).
-#   TRACEGRAPH_TOKEN — pro/team tier, enables hosted PR comments and team baselines.
-#
-# Required files committed to the repo:
-#   tracegraph.config.json         — project config
-#   .tracegraph/baselines/         — approved baseline files
-#   .tracegraph/suppressions/      — suppression rules (security-sensitive; see note below)
-#   .tracegraph/scenarios/         — optional scenario definitions
-
-name: TraceGraph Runtime Assurance
+name: CI
 
 on:
   pull_request:
-    branches: [main, master, develop]
   push:
-    branches: [main, master]
+    branches: [main]
 
-# Cancel in-progress runs for the same PR/branch to avoid wasted compute.
 concurrency:
-  group: tracegraph-${{ github.ref }}
+  group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-
-  # ─────────────────────────────────────────────────────────────────────────────
-  # Job 1: Trace Node / TypeScript
-  # Runs your Node.js tests under TraceGraph and uploads the resulting artifacts.
-  # ─────────────────────────────────────────────────────────────────────────────
-  trace-node:
-    name: Trace Node / TypeScript
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: "npm"
-
-      - name: Install Node dependencies
-        run: npm ci
-
-      # TraceGraph uses a shared scenario ID (PR number) to correlate Node and PHP
-      # traces in the merge job. For push-to-main runs, use the commit SHA.
-      - name: Run Node tests with TraceGraph
-        run: |
-          npx tracegraph run \
-            --run-id "node-${{ github.run_id }}-${{ github.run_attempt }}" \
-            --scenario-id "pr-${{ github.event.pull_request.number || github.sha }}" \
-            -- npm test
-        env:
-          NODE_ENV: test
-          TRACEGRAPH_ENABLED: "1"
-
-      # Upload the entire .tracegraph directory from the Node job.
-      # The merge job downloads both Node and PHP artifacts and combines them.
-      - name: Upload Node TraceGraph artifacts
-        if: always()   # upload even when tests fail — findings are still valuable
-        uses: actions/upload-artifact@v4
-        with:
-          name: tracegraph-node-${{ github.run_id }}
-          path: |
-            .tracegraph/traces/
-            .tracegraph/reports/
-            .tracegraph/runs/
-          retention-days: 7
-
-
-  # ─────────────────────────────────────────────────────────────────────────────
-  # Job 2: Trace PHP / Laravel
-  # Runs your Laravel tests under TraceGraph and uploads the resulting artifacts.
-  # Remove this job for TypeScript-only projects.
-  # ─────────────────────────────────────────────────────────────────────────────
-  trace-php:
-    name: Trace PHP / Laravel
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-
-    services:
-      mysql:
-        image: mysql:8
-        env:
-          MYSQL_ROOT_PASSWORD: root
-          MYSQL_DATABASE: app_test
-        ports:
-          - 3306:3306
-        options: >-
-          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot"
-          --health-interval=10s
-          --health-timeout=5s
-          --health-retries=5
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup PHP
-        uses: shivammathur/setup-php@v2
-        with:
-          php-version: "8.3"
-          extensions: mbstring, pdo_mysql, xdebug
-          coverage: none
-          ini-values: "xdebug.mode=off"   # off by default; TraceGraph enables per-run
-
-      - name: Install PHP dependencies
-        run: composer install --no-interaction --prefer-dist --no-progress
-
-      - name: Prepare Laravel test environment
-        run: |
-          cp .env.example .env.testing
-          php artisan key:generate --env=testing
-          php artisan migrate --env=testing --force
-
-      # For Laravel projects, tracegraph/laravel provides the adapter.
-      # Xdebug enrichment is optional; set --xdebug-trace to enable.
-      - name: Run Laravel tests with TraceGraph
-        run: |
-          tracegraph run \
-            --run-id "php-${{ github.run_id }}-${{ github.run_attempt }}" \
-            --scenario-id "pr-${{ github.event.pull_request.number || github.sha }}" \
-            -- php artisan test --env=testing
-        env:
-          TRACEGRAPH_ENABLED: "1"
-          DB_HOST: 127.0.0.1
-          DB_PORT: 3306
-          DB_DATABASE: app_test
-          DB_USERNAME: root
-          DB_PASSWORD: root
-
-      - name: Upload PHP TraceGraph artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: tracegraph-php-${{ github.run_id }}
-          path: |
-            .tracegraph/traces/
-            .tracegraph/reports/
-            .tracegraph/runs/
-          retention-days: 7
-
-
-  # ─────────────────────────────────────────────────────────────────────────────
-  # Job 3: Merge Bundle, Compare, and Report
-  # Downloads Node + PHP artifacts, merges into a TraceBundle, compares against
-  # committed baselines, and publishes a runtime assurance report.
-  # ─────────────────────────────────────────────────────────────────────────────
-  merge-and-report:
-    name: Merge Bundle and Report
+  test:
+    name: Test
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    needs: [trace-node, trace-php]
-    # Run even when trace jobs fail — we still want to report findings
-    if: always()
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        # Checkout includes committed baselines, suppressions, and scenario files
+      - uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: pnpm/action-setup@v4
         with:
-          node-version: "20"
-          cache: "npm"
+          version: 9
 
-      - name: Install TraceGraph CLI
-        run: npm install -g tracegraph
-
-      # ── Download artifacts ──────────────────────────────────────────────────
-      - name: Download Node artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/setup-node@v4
         with:
-          name: tracegraph-node-${{ github.run_id }}
-          path: .tracegraph-ci/node
+          node-version: 22
+          cache: pnpm
 
-      - name: Download PHP artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: tracegraph-php-${{ github.run_id }}
-          path: .tracegraph-ci/php
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
 
-      # ── Merge into a TraceBundle ────────────────────────────────────────────
-      # For single-language projects, skip this step and pass the trace directory
-      # directly to tracegraph compare below.
-      - name: Merge TraceGraph bundle
-        run: |
-          SCENARIO_ID="pr-${{ github.event.pull_request.number || github.sha }}"
-          tracegraph bundle merge \
-            --scenario-id "$SCENARIO_ID" \
-            --input .tracegraph-ci/node \
-            --input .tracegraph-ci/php \
-            --out ".tracegraph/bundles/${SCENARIO_ID}.tgbundle.json"
+      - name: Build webview bundle
+        run: pnpm --filter @tracegraph/webview build
 
-      # ── Compare against committed baselines ────────────────────────────────
-      # Exit code semantics:
-      #   0 = passed, no critical/blocking findings
-      #   1 = critical findings present (fails CI by default when failOnCritical=true)
-      #   4 = policy review required (suppressions.json modified in this PR)
-      #   5 = baseline schema migration required
-      - name: Compare against baselines
-        id: compare
-        run: |
-          SCENARIO_ID="pr-${{ github.event.pull_request.number || github.sha }}"
-          tracegraph compare \
-            --baseline .tracegraph/baselines \
-            --candidate ".tracegraph/bundles/${SCENARIO_ID}.tgbundle.json" \
-            --suppressions .tracegraph/suppressions/tracegraph.suppressions.json \
-            --approvals .tracegraph/approvals/findings.json \
-            --out ".tracegraph/reports/${SCENARIO_ID}.report.json"
-        continue-on-error: true   # capture exit code; we report before failing
-
-      # ── Detect suppression file changes (security check) ───────────────────
-      # Any PR that modifies tracegraph.suppressions.json triggers an additional
-      # high-severity finding. In team mode (TRACEGRAPH_TOKEN set), this blocks
-      # merge until a designated reviewer approves.
-      - name: Check for suppression file changes
-        run: |
-          if git diff --name-only origin/${{ github.base_ref }}...HEAD \
-              | grep -q "tracegraph.suppressions.json"; then
-            echo "::warning::tracegraph.suppressions.json was modified in this PR."
-            echo "::warning::All suppression changes require security reviewer approval."
-          fi
-
-      # ── Publish to GitHub step summary (community — always free) ───────────
-      - name: Publish GitHub step summary
-        if: always()
-        run: |
-          SCENARIO_ID="pr-${{ github.event.pull_request.number || github.sha }}"
-          tracegraph report \
-            --input ".tracegraph/reports/${SCENARIO_ID}.report.json" \
-            --format github-step-summary \
-            >> "$GITHUB_STEP_SUMMARY"
-
-      # ── Post PR comment (pro/team tier — requires TRACEGRAPH_TOKEN) ─────────
-      - name: Post PR comment
-        if: |
-          github.event_name == 'pull_request' &&
-          env.TRACEGRAPH_TOKEN != ''
-        run: |
-          SCENARIO_ID="pr-${{ github.event.pull_request.number }}"
-          tracegraph report \
-            --input ".tracegraph/reports/${SCENARIO_ID}.report.json" \
-            --format github-pr-comment \
-            --pr "${{ github.event.pull_request.number }}" \
-            --repo "${{ github.repository }}"
-        env:
-          TRACEGRAPH_TOKEN: ${{ secrets.TRACEGRAPH_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      # ── Upload merged report as artifact ───────────────────────────────────
-      - name: Upload merged report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: tracegraph-report-${{ github.run_id }}
-          path: |
-            .tracegraph/bundles/
-            .tracegraph/reports/
-          retention-days: 30
-
-      # ── Fail CI based on compare exit code ────────────────────────────────
-      # This step re-raises the compare exit code after all reporting is done,
-      # so developers see the full report before the job is marked failed.
-      - name: Enforce quality gate
-        run: exit ${{ steps.compare.outcome == 'failure' && '1' || '0' }}
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Single-language variant (TypeScript only)
-# Replace the three-job workflow above with this simpler version:
-#
-#   trace-and-report:
-#     runs-on: ubuntu-latest
-#     steps:
-#       - uses: actions/checkout@v4
-#       - uses: actions/setup-node@v4
-#         with: { node-version: "20", cache: "npm" }
-#       - run: npm ci
-#       - run: npx tracegraph run -- npm test
-#       - run: |
-#           npx tracegraph compare \
-#             --baseline .tracegraph/baselines \
-#             --candidate .tracegraph/latest \
-#             --out .tracegraph/reports/ci.report.json
-#         continue-on-error: true
-#       - run: |
-#           npx tracegraph report \
-#             --input .tracegraph/reports/ci.report.json \
-#             --format github-step-summary \
-#             >> "$GITHUB_STEP_SUMMARY"
-#       - run: exit ${{ steps.compare.outcome == 'failure' && '1' || '0' }}
-# ─────────────────────────────────────────────────────────────────────────────
+      - name: Run tests
+        run: pnpm test

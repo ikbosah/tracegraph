@@ -6,7 +6,7 @@ export default defineConfig({
   plugins: [react()],
   resolve: {
     alias: {
-      '@tracegraph/graph-engine': path.resolve(__dirname, '../../packages/graph-engine/src/index.ts'),
+      '@tracegraph/graph-engine': path.resolve(__dirname, '../../packages/graph-engine/src/graph.ts'),
       '@tracegraph/shared-types':  path.resolve(__dirname, '../../packages/shared-types/src/index.ts'),
     },
   },

@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="300" viewBox="0 0 1200 300" role="img" aria-label="TraceGraph logo">
+  <defs>
+    <style>
+      .blue{fill:#0877FF;stroke:#0877FF;}
+      .navy{fill:#07172F;stroke:#07172F;}
+      .txt{font-family: Inter, Segoe UI, Arial, sans-serif;font-weight:600;}
+    </style>
+  </defs>
+  <rect width="1200" height="300" fill="none"/>
+  <g transform="translate(35,45)">
+    <!-- stylized TG monogram -->
+    <rect x="0" y="0" width="165" height="42" rx="5" class="blue"/>
+    <rect x="48" y="0" width="42" height="112" rx="2" class="blue"/>
+    <path d="M84 140 A75 75 0 1 0 198 76" fill="none" stroke="#07172F" stroke-width="44" stroke-linecap="round"/>
+    <rect x="145" y="90" width="96" height="40" rx="5" class="navy"/>
+    <!-- trace path -->
+    <path d="M22 170 L88 102 L143 57 L206 20" fill="none" stroke="#07172F" stroke-width="14" stroke-linecap="round"/>
+    <path d="M88 102 L143 57 L206 20" fill="none" stroke="#0877FF" stroke-width="14" stroke-linecap="round"/>
+    <circle cx="22" cy="170" r="19" fill="#ffffff" stroke="#07172F" stroke-width="12"/>
+    <circle cx="88" cy="102" r="18" fill="#ffffff" stroke="#0877FF" stroke-width="12"/>
+    <circle cx="206" cy="20" r="19" fill="#ffffff" stroke="#0877FF" stroke-width="12"/>
+  </g>
+  <text x="330" y="174" class="txt" font-size="98" fill="#0877FF">Trace</text>
+  <text x="618" y="174" class="txt" font-size="98" fill="#07172F">Graph</text>
+</svg>

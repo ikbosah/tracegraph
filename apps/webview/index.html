@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TraceGraph Viewer</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <!--
+      Development mode: provide inline trace data for the app to consume.
+      In production (tracegraph open --html), the CLI replaces this script tag
+      with the actual trace JSON.
+    -->
+    <script id="tracegraph-data" type="application/json">
+      { "__dev": true }
+    </script>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

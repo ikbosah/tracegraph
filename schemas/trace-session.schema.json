@@ -1,0 +1,92 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "tracegraph.trace.v1",
+  "title": "TraceSession",
+  "description": "A complete, finalised trace session produced by TraceGraph.",
+  "type": "object",
+  "required": [
+    "schemaVersion", "traceId", "sessionId", "runId",
+    "workspaceRoot", "language", "entrypoint",
+    "startedAt", "status", "captureLevel", "events"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "tracegraph.trace.v1"
+    },
+    "traceId":       { "type": "string", "pattern": "^trace_[0-9a-f]+$" },
+    "sessionId":     { "type": "string", "pattern": "^sess_[0-9a-f]+$" },
+    "runId":         { "type": "string", "pattern": "^run_[0-9a-f]+$" },
+    "scenarioId":    { "type": "string" },
+    "projectId":     { "type": "string" },
+    "workspaceRoot": { "type": "string" },
+    "language": {
+      "type": "string",
+      "enum": ["typescript", "javascript", "php"]
+    },
+    "framework": { "type": "string" },
+    "entrypoint": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["type", "method", "path"],
+          "properties": {
+            "type":    { "const": "http_request" },
+            "method":  { "type": "string" },
+            "path":    { "type": "string" },
+            "handler": { "type": "string" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["type", "testName"],
+          "properties": {
+            "type":     { "const": "test_case" },
+            "testName": { "type": "string" },
+            "testFile": { "type": "string" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["type", "functionName"],
+          "properties": {
+            "type":         { "const": "function" },
+            "functionName": { "type": "string" },
+            "file":         { "type": "string" },
+            "line":         { "type": "integer" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["type", "command"],
+          "properties": {
+            "type":    { "const": "cli_command" },
+            "command": { "type": "string" }
+          }
+        }
+      ]
+    },
+    "startedAt": { "type": "number" },
+    "endedAt":   { "type": "number" },
+    "status": {
+      "type": "string",
+      "enum": ["running", "passed", "failed", "error"]
+    },
+    "captureLevel": {
+      "type": "object",
+      "required": ["overall", "label", "adapters"],
+      "properties": {
+        "overall": { "type": "integer", "minimum": 0, "maximum": 5 },
+        "label":   { "type": "string" },
+        "adapters": { "type": "object" }
+      }
+    },
+    "events": {
+      "type": "array",
+      "items": { "$ref": "tracegraph.event.v1" }
+    },
+    "detailStreams": { "type": "object" },
+    "metadata":     { "type": "object" }
+  }
+}

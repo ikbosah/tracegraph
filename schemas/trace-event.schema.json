@@ -1,0 +1,113 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "tracegraph.event.v1",
+  "title": "TraceEvent",
+  "description": "A single runtime event captured during a TraceGraph run.",
+  "type": "object",
+  "required": ["schemaVersion", "eventId", "traceId", "type", "language", "name", "startTime"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "tracegraph.event.v1"
+    },
+    "eventId": {
+      "type": "string",
+      "pattern": "^evt_[0-9a-f]+$",
+      "description": "Unique ID for this event, stable within a trace."
+    },
+    "traceId": {
+      "type": "string",
+      "pattern": "^trace_[0-9a-f]+$"
+    },
+    "parentEventId": {
+      "oneOf": [{ "type": "string" }, { "type": "null" }],
+      "description": "Structural parent in the call stack. Null for root events."
+    },
+    "causalParentEventId": {
+      "oneOf": [{ "type": "string" }, { "type": "null" }],
+      "description": "Causal parent — may differ from parentEventId for async/queue events."
+    },
+    "causalParentRef": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["traceId", "eventId"],
+          "properties": {
+            "traceId": { "type": "string" },
+            "eventId": { "type": "string" }
+          }
+        },
+        { "type": "null" }
+      ],
+      "description": "Cross-trace causal reference (e.g. HTTP request → queue job in another trace)."
+    },
+    "asyncGroupId": { "type": "string" },
+    "branchId":     { "type": "string" },
+    "concurrencyType": {
+      "type": "string",
+      "enum": ["sequential", "parallel", "promise_all", "race", "background"]
+    },
+    "type": {
+      "type": "string",
+      "enum": [
+        "trace_start", "trace_end",
+        "http_request", "http_response",
+        "function_call", "method_call",
+        "db_query",
+        "external_http_call",
+        "file_operation", "cache_operation",
+        "queue_event",
+        "log", "error",
+        "branch", "return",
+        "auth_check", "authorization_check",
+        "rate_limit_check",
+        "lock_acquire", "lock_release",
+        "transaction_start", "transaction_commit", "transaction_rollback"
+      ]
+    },
+    "language": {
+      "type": "string",
+      "enum": ["typescript", "javascript", "php"]
+    },
+    "name":        { "type": "string" },
+    "displayName": { "type": "string" },
+    "file":        { "type": "string" },
+    "line":        { "type": "integer", "minimum": 0 },
+    "column":      { "type": "integer", "minimum": 0 },
+    "className":   { "type": "string" },
+    "functionName":{ "type": "string" },
+    "moduleName":  { "type": "string" },
+    "framework": {
+      "type": "string",
+      "enum": ["express", "nestjs", "nextjs", "fastify", "laravel", "symfony", "plain"]
+    },
+    "startTime": { "type": "number" },
+    "endTime":   { "type": "number" },
+    "durationMs":{ "type": "number", "minimum": 0 },
+    "input":     {},
+    "output":    {},
+    "error": {
+      "type": "object",
+      "required": ["type", "message"],
+      "properties": {
+        "type":    { "type": "string" },
+        "message": { "type": "string" },
+        "stack":   { "type": "string" }
+      }
+    },
+    "resource": {
+      "type": "object",
+      "required": ["type", "key", "operation"],
+      "properties": {
+        "type":      { "type": "string" },
+        "key":       { "type": "string" },
+        "operation": { "type": "string" }
+      }
+    },
+    "security":    { "type": "object" },
+    "reliability": { "type": "object" },
+    "tags":        { "type": "array", "items": { "type": "string" } },
+    "metadata":    { "type": "object" }
+  }
+}

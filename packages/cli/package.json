@@ -1,0 +1,21 @@
+{
+  "name": "tracegraph",
+  "version": "0.0.1",
+  "private": true,
+  "description": "CLI-first runtime assurance platform",
+  "main": "src/index.ts",
+  "bin": {
+    "tracegraph": "bin/tracegraph.js"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsup src/index.ts --format cjs --outDir dist --dts"
+  },
+  "dependencies": {
+    "@tracegraph/ci-reporter":  "workspace:*",
+    "@tracegraph/graph-engine": "workspace:*",
+    "@tracegraph/shared-types": "workspace:*",
+    "@tracegraph/trace-core":   "workspace:*",
+    "commander":                "^12.1.0"
+  }
+}

@@ -1,20 +1,18 @@
 # TraceGraph
 
-**Runtime assurance for AI-generated and human-written code.**
+> A test tells you whether an assertion passed.
+> TraceGraph shows you what the code actually did.
+
+TraceGraph exists to help teams ship software with stronger runtime evidence, better code review, and more confidence in the AI-assisted software development era.
 
 TraceGraph captures what your code actually does at runtime, turns execution into an interactive behavior graph, and helps teams detect risky changes before software reaches production.
 
-It is designed for modern development workflows where code is written by humans, AI coding tools, or both — and where passing tests alone may not be enough to know whether a release is safe.
+It is designed for modern development workflows where code is written by humans, AI coding tools, or both, and where passing tests alone may not be enough to know whether a release is safe.
 
----
 
 ## Why TraceGraph?
 
-Modern software teams move fast.
-
-AI coding tools make teams move even faster.
-
-But faster code generation creates a new problem:
+Modern software teams move fast. AI coding tools make teams move even faster. But faster code generation creates a new problem:
 
 > How do you know what the generated or changed code actually did when it ran?
 
@@ -37,7 +35,6 @@ TraceGraph helps answer questions like:
 - Did AI-generated code introduce a risky behavior change?
 - Did a critical flow still behave like the approved baseline?
 
----
 
 ## What TraceGraph Does
 
@@ -57,7 +54,6 @@ TraceGraph captures runtime events such as:
 
 It then builds a **runtime behavior graph** that can be inspected, compared, and used as evidence during code review and release assurance.
 
----
 
 ## Core Idea
 
@@ -81,7 +77,6 @@ Tests passed, but runtime behavior changed:
 
 TraceGraph helps teams move from simple pass/fail testing to **runtime evidence-based review**.
 
----
 
 ## Theoretical Foundation
 
@@ -104,7 +99,6 @@ In precise terms:
 
 > TraceGraph constructs a runtime behavior graph from observed execution events and checks graph, temporal, and differential properties against approved semantic baselines.
 
----
 
 ## What TraceGraph Can Verify
 
@@ -121,7 +115,6 @@ TraceGraph does **not** prove universal correctness.
 
 It increases confidence by turning executed tests and scenarios into runtime evidence.
 
----
 
 ## Architecture Overview
 
@@ -180,7 +173,6 @@ TraceGraph
     └── ProdReady evidence packs
 ```
 
----
 
 ## CLI-First Design
 
@@ -195,11 +187,6 @@ tracegraph compare
 tracegraph open --html
 ```
 
-The CLI is the canonical execution interface.
-
-The VS Code extension is a viewer, launcher, and source-navigation layer on top of the CLI.
-
----
 
 ## Quick Start: Express TypeScript
 
@@ -244,7 +231,6 @@ npx tracegraph open --html .tracegraph/reports/latest.report.json
 
 Open the generated HTML file in your browser.
 
----
 
 ## Example Finding
 
@@ -275,7 +261,6 @@ Confirm whether coupon expiry validation was moved elsewhere.
 If intentional, approve the new baseline with compensating evidence.
 ```
 
----
 
 ## Runtime Behavior Graph
 
@@ -300,9 +285,6 @@ input.amount flowed into invoice.total
 authorization happened before database write
 ```
 
-That is why TraceGraph uses a DAG.
-
----
 
 ## Trace Events
 
@@ -342,11 +324,9 @@ Example event:
 }
 ```
 
----
-
 ## Async and Concurrent Execution
 
-TraceGraph supports async branch metadata for JavaScript and TypeScript.
+TraceGraph supports async branch metadata for JavaScript and TypeScript. This helps detect behavior that normal call stacks miss.
 
 Example:
 
@@ -368,9 +348,6 @@ HTTP Request
         └── DB query: orders
 ```
 
-This helps detect behavior that normal call stacks miss.
-
----
 
 ## Cross-Trace Causality
 
@@ -397,7 +374,6 @@ SendOrderEmailJob.handle
 
 This is important for queues, background jobs, retries, and distributed flows.
 
----
 
 ## Semantic Baselines
 
@@ -453,10 +429,8 @@ Example:
 ```
 
 Baselines are small enough to commit to git.
-
 Raw traces are local artifacts and are pruned automatically.
 
----
 
 ## Diffing Runtime Behavior
 
@@ -501,7 +475,6 @@ invoiceId: string
 
 TraceGraph focuses on meaningful behavior, not volatile values.
 
----
 
 ## Capture Level
 
@@ -534,14 +507,12 @@ Example:
 ```
 
 Capture level appears in:
-
 * Trace artifacts
 * CLI output
 * HTML reports
 * CI summaries
 * Future PR comments
 
----
 
 ## Approvals and Suppressions
 
@@ -552,8 +523,6 @@ Baseline approval = updates expected behavior.
 Finding approval = accepts one specific finding instance.
 Suppression = conditionally hides a recurring finding only when compensating evidence still exists.
 ```
-
-This distinction is important.
 
 A baseline approval says:
 
@@ -591,7 +560,6 @@ Example suppression:
 
 If the compensating control disappears, the finding reopens.
 
----
 
 ## Security-Sensitive Suppression Files
 
@@ -609,7 +577,6 @@ In team mode, this can require approval from a designated reviewer.
 
 This prevents a developer from introducing a security issue and hiding it in the same PR.
 
----
 
 ## Storage Management
 
@@ -650,7 +617,6 @@ tracegraph clean --older-than 7d
 tracegraph clean --keep-last 20
 ```
 
----
 
 ## Self-Contained HTML Reports
 
@@ -668,9 +634,6 @@ The HTML file can be:
 * Attached to a PR
 * Used in release evidence packs
 
-No server is required for the MVP HTML viewer.
-
----
 
 ## Multi-Language Trace Bundles
 
@@ -730,8 +693,6 @@ The result is a `TraceBundle`.
 }
 ```
 
----
-
 ## CI Example
 
 Basic GitHub Actions example:
@@ -776,8 +737,6 @@ jobs:
             .tracegraph/traces/
 ```
 
----
-
 ## Scenario Runner
 
 TraceGraph is designed to support scenario-based runtime assurance.
@@ -810,9 +769,6 @@ Example scenario:
 }
 ```
 
-Future versions may generate scenarios automatically from TraceGraph findings.
-
----
 
 ## Code Assurance
 
@@ -830,15 +786,6 @@ TraceGraph helps reviewers see:
 * What scenarios are missing
 * What should be reviewed before merge
 
-Future Code Assurance features may include:
-
-* Runtime risk explanations
-* Suggested missing tests
-* Scenario generation from findings
-* PR summaries
-* Release risk classification
-
----
 
 ## What TraceGraph Is Not
 
@@ -852,11 +799,8 @@ TraceGraph is not a replacement for:
 * Observability tools
 * Security testing
 
-TraceGraph complements these tools.
+TraceGraph complements these tools. It adds runtime behavior evidence to the development and release process.
 
-It adds runtime behavior evidence to the development and release process.
-
----
 
 ## What TraceGraph Is
 
@@ -870,7 +814,6 @@ TraceGraph is:
 * A runtime verification layer for AI-assisted software development
 * A release assurance evidence engine for ProdReady
 
----
 
 ## Contributing
 
@@ -886,15 +829,3 @@ Expected contribution areas:
 * CI integrations
 * Documentation
 * Sample applications
-
----
-
-## Guiding Principle
-
-> A test tells you whether an assertion passed.
-> TraceGraph shows you what the code actually did.
-
-TraceGraph exists to help teams ship software with stronger runtime evidence, better code review, and more confidence in the AI-assisted software development era.
-
-```
-```

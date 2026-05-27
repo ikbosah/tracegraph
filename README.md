@@ -1,4 +1,3 @@
-````markdown
 # TraceGraph
 
 **Runtime assurance for AI-generated and human-written code.**

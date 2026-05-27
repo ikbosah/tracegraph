@@ -7,15 +7,36 @@
 TraceGraph exists to help teams ship software with stronger runtime evidence, better code review, and more confidence in the AI-assisted software development era. TraceGraph captures what your code actually does at runtime, turns execution into an interactive behavior graph, and helps teams detect risky changes before software reaches production. It is designed for modern development workflows where code is written by humans, AI coding tools, or both, and where passing tests alone may not be enough to know whether a release is safe.
 
 
+## Core Idea
+
+TraceGraph turns this:
+
+```text
+Tests passed.
+````
+
+Into this:
+
+```text
+Tests passed, but runtime behavior changed:
+
+- validateCouponExpiry() was removed from POST /invoices
+- invoices table write still occurred
+- authorization check remained present
+- response shape added discountOverride
+- external call count unchanged
+```
+
+TraceGraph helps you move from simple pass/fail testing to **runtime evidence-based review**.
+
+
 ## Why TraceGraph?
 
 Modern software teams move fast. AI coding tools make teams move even faster. But faster code generation creates a new problem:
 
 > How do you know what the generated or changed code actually did when it ran?
 
-A normal code diff shows what changed in files.
-
-A normal test result shows whether assertions passed.
+A normal code diff shows what changed in files. A normal test result shows whether assertions passed.
 
 TraceGraph shows the missing layer:
 
@@ -50,29 +71,6 @@ TraceGraph captures runtime events such as:
 - Concurrent execution paths
 
 It then builds a **runtime behavior graph** that can be inspected, compared, and used as evidence during code review and release assurance.
-
-
-## Core Idea
-
-TraceGraph turns this:
-
-```text
-Tests passed.
-````
-
-Into this:
-
-```text
-Tests passed, but runtime behavior changed:
-
-- validateCouponExpiry() was removed from POST /invoices
-- invoices table write still occurred
-- authorization check remained present
-- response shape added discountOverride
-- external call count unchanged
-```
-
-TraceGraph helps teams move from simple pass/fail testing to **runtime evidence-based review**.
 
 
 ## Theoretical Foundation

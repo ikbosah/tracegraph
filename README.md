@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/tracegraph_logo_transparent.png" alt="TraceGraph Logo" width="420" />
+</p>
+
 # TraceGraph
 
 AI-generated code needs to be kept on a leash. A thousand-file diff is not useful if the human still has to manually inspect every change to understand what broke, what shifted, or what quietly changed behavior. That is the new bottleneck in software development: not generating code, but reviewing it with confidence. The real challenge is making sure AI-generated changes do not introduce bugs, remove important safeguards, or deviate from the system’s expected behavior.

@@ -83,54 +83,6 @@ TraceGraph helps teams move from simple pass/fail testing to **runtime evidence-
 
 ---
 
-## Product Positioning
-
-TraceGraph is a:
-
-```text
-CLI-first runtime assurance platform
-with a standalone HTML viewer,
-VS Code visual review experience,
-language adapters,
-behavior diff engine,
-and CI-ready reports.
-```
-
-The core execution model is CLI-first.
-
-The visual review experience can happen through:
-
-* Self-contained HTML reports
-* VS Code extension
-* CI reports
-* PR summaries
-* Future team dashboards
-
----
-
-## How TraceGraph Fits with ProdReady
-
-TraceGraph can be used independently as a developer tool.
-
-It is also designed to power **ProdReady**, a broader release assurance service.
-
-```text
-ProdReady = release assurance platform/service
-TraceGraph = runtime behavior evidence engine
-```
-
-ProdReady asks:
-
-> Should this release go to production?
-
-TraceGraph answers:
-
-> What actually changed at runtime?
-
-Together, they provide release assurance for modern software teams, especially teams using AI-assisted development.
-
----
-
 ## Theoretical Foundation
 
 TraceGraph is grounded in established computer science ideas:
@@ -553,8 +505,6 @@ TraceGraph focuses on meaningful behavior, not volatile values.
 
 ## Capture Level
 
-TraceGraph must never silently provide weak traces.
-
 Every trace includes a capture-level summary.
 
 Example:
@@ -722,26 +672,6 @@ No server is required for the MVP HTML viewer.
 
 ---
 
-## VS Code Extension
-
-The VS Code extension is planned as a visual review layer.
-
-It will:
-
-* Launch TraceGraph CLI commands
-* Open completed trace artifacts
-* Show behavior graphs
-* Show timeline and data-flow views
-* Navigate from graph nodes to source code
-* Display findings
-* Help review baselines and approvals
-
-The extension will not own the runtime engine.
-
-It will spawn the CLI and read completed artifacts.
-
----
-
 ## Multi-Language Trace Bundles
 
 TraceGraph supports the idea of linked traces from multiple languages or runtimes.
@@ -884,7 +814,7 @@ Future versions may generate scenarios automatically from TraceGraph findings.
 
 ---
 
-## AI Code Assurance
+## Code Assurance
 
 TraceGraph is especially useful when reviewing AI-generated code.
 
@@ -900,136 +830,13 @@ TraceGraph helps reviewers see:
 * What scenarios are missing
 * What should be reviewed before merge
 
-Future AI Code Assurance features may include:
+Future Code Assurance features may include:
 
 * Runtime risk explanations
 * Suggested missing tests
 * Scenario generation from findings
 * PR summaries
 * Release risk classification
-
----
-
-## Roadmap
-
-### Milestone 0: Trace File Protocol
-
-* Schema versioning
-* JSONL event writing
-* Atomic file finalization
-* Low-volume CLI stdout protocol
-* Storage configuration
-* `tracegraph clean`
-
-### Milestone 1: Express Vertical Slice
-
-* `tracegraph run`
-* Express adapter
-* One real request trace
-* Trace JSON output
-* Self-contained HTML viewer
-
-### Milestone 2: Diff and Baseline
-
-* Structured semantic signatures
-* Compact baselines
-* Behavior diff
-* Finding fingerprints
-* Finding approvals
-* Suppressions with evidence
-
-### Milestone 3: Test Runner Adapters
-
-* Vitest adapter
-* Jest adapter
-* Capture-level reporting
-* No silent weak traces
-
-### Milestone 4: Laravel Adapter
-
-* Laravel middleware
-* DB listener
-* Gate hooks
-* Policy inference
-* Optional Xdebug enrichment
-
-### Milestone 5: VS Code Viewer
-
-* CLI launcher
-* Trace viewer
-* Graph navigation
-* Timeline view
-* Source-code navigation
-
-### Milestone 6: Scenario Runner
-
-* HTTP/API scenarios
-* Concurrency scenarios
-* Security scenarios
-* Reliability scenarios
-
-### Milestone 7: CI and Team Workflows
-
-* GitHub Actions
-* PR summaries
-* Team baselines
-* Approval workflow
-* Policy enforcement
-
-### Milestone 8: AI Code Assurance
-
-* AI-generated risk summaries
-* Missing scenario suggestions
-* Scenario generation from findings
-* Runtime evidence for AI code review
-
----
-
-## Open Source and Commercial Model
-
-TraceGraph is planned as an open-core project.
-
-### Community Edition
-
-The community edition should include:
-
-* CLI
-* Local tracing
-* Basic JavaScript/TypeScript support
-* Basic PHP/Laravel support
-* Self-contained HTML viewer
-* Local behavior diff
-* Compact baselines
-* Basic GitHub Actions support
-
-### Commercial / Team Edition
-
-Commercial features may include:
-
-* Hosted PR intelligence
-* Team baselines
-* Approval workflows
-* Suppression governance
-* AI Code Assurance
-* Security Lab
-* Reliability Lab
-* Team dashboard
-* Policy-as-code
-* Audit history
-* ProdReady release evidence packs
-
----
-
-## License
-
-TraceGraph Community Edition is intended to be released under the Apache License 2.0.
-
-Enterprise and commercial modules may be licensed separately.
-
-```text
-Community core: Apache-2.0
-Enterprise modules: Commercial License
-```
 
 ---
 
@@ -1062,23 +869,6 @@ TraceGraph is:
 * A PR review assistant
 * A runtime verification layer for AI-assisted software development
 * A release assurance evidence engine for ProdReady
-
----
-
-## Status
-
-TraceGraph is currently in early product and architecture design.
-
-The initial engineering focus is:
-
-```text
-1. CLI file protocol
-2. Express TypeScript vertical slice
-3. Self-contained HTML viewer
-4. Behavior diff
-5. Compact baselines
-6. Basic CI reporting
-```
 
 ---
 

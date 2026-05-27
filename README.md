@@ -7,7 +7,7 @@
 TraceGraph exists to help teams ship software with stronger runtime evidence, better code review, and more confidence in the AI-assisted software development era. TraceGraph captures what your code actually does at runtime, turns execution into an interactive behavior graph, and helps teams detect risky changes before software reaches production. It is designed for modern development workflows where code is written by humans, AI coding tools, or both, and where passing tests alone may not be enough to know whether a release is safe.
 
 
-## Core Idea
+## Core Feature
 
 TraceGraph turns this:
 
@@ -30,6 +30,96 @@ Tests passed, but runtime behavior changed:
 TraceGraph helps you move from simple pass/fail testing to **runtime evidence-based review**.
 
 
+## Starting Started - CLI
+
+TraceGraph is designed to work anywhere developers already run code:
+
+```bash
+tracegraph run -- npm test
+tracegraph run -- php artisan test
+tracegraph run -- npx vitest
+tracegraph run -- npx playwright test
+tracegraph compare
+tracegraph open --html
+```
+
+
+## Quick Start: Express TypeScript
+
+Install TraceGraph:
+
+```bash
+npm install -D tracegraph @tracegraph/js
+```
+
+Add TraceGraph middleware:
+
+```ts
+import { traceExpress } from "@tracegraph/js/express";
+
+app.use(traceExpress());
+```
+
+Run your tests with TraceGraph:
+
+```bash
+npx tracegraph run -- npm test
+```
+
+Create a baseline:
+
+```bash
+npx tracegraph baseline create
+```
+
+After changing code, run again:
+
+```bash
+npx tracegraph run -- npm test
+npx tracegraph compare
+```
+
+Generate a self-contained HTML report:
+
+```bash
+npx tracegraph open --html .tracegraph/reports/latest.report.json
+```
+
+Open the generated HTML file in your browser.
+
+
+## Example Finding
+
+```text
+High Risk: Validation step removed
+
+Route:
+POST /invoices
+
+Baseline behavior:
+InvoiceController.store
+ → validateCustomer
+ → validateCouponExpiry
+ → InvoiceService.create
+ → DB write: invoices
+
+Candidate behavior:
+InvoiceController.store
+ → validateCustomer
+ → InvoiceService.create
+ → DB write: invoices
+
+Impact:
+The candidate release removed validateCouponExpiry() while still creating invoices.
+
+Recommendation:
+Confirm whether coupon expiry validation was moved elsewhere.
+If intentional, approve the new baseline with compensating evidence.
+```
+
+
+
+
 ## Why TraceGraph?
 
 Modern software teams move fast. AI coding tools make teams move even faster. But faster code generation creates a new problem:
@@ -37,10 +127,6 @@ Modern software teams move fast. AI coding tools make teams move even faster. Bu
 > How do you know what the generated or changed code actually did when it ran?
 
 A normal code diff shows what changed in files. A normal test result shows whether assertions passed.
-
-TraceGraph shows the missing layer:
-
-> **What changed in runtime behavior?**
 
 TraceGraph helps answer questions like:
 
@@ -166,94 +252,6 @@ TraceGraph
     ├── Finding approvals
     ├── Suppressions with evidence
     └── ProdReady evidence packs
-```
-
-
-## CLI-First Design
-
-TraceGraph is designed to work anywhere developers already run code:
-
-```bash
-tracegraph run -- npm test
-tracegraph run -- php artisan test
-tracegraph run -- npx vitest
-tracegraph run -- npx playwright test
-tracegraph compare
-tracegraph open --html
-```
-
-
-## Quick Start: Express TypeScript
-
-Install TraceGraph:
-
-```bash
-npm install -D tracegraph @tracegraph/js
-```
-
-Add TraceGraph middleware:
-
-```ts
-import { traceExpress } from "@tracegraph/js/express";
-
-app.use(traceExpress());
-```
-
-Run your tests with TraceGraph:
-
-```bash
-npx tracegraph run -- npm test
-```
-
-Create a baseline:
-
-```bash
-npx tracegraph baseline create
-```
-
-After changing code, run again:
-
-```bash
-npx tracegraph run -- npm test
-npx tracegraph compare
-```
-
-Generate a self-contained HTML report:
-
-```bash
-npx tracegraph open --html .tracegraph/reports/latest.report.json
-```
-
-Open the generated HTML file in your browser.
-
-
-## Example Finding
-
-```text
-High Risk: Validation step removed
-
-Route:
-POST /invoices
-
-Baseline behavior:
-InvoiceController.store
- → validateCustomer
- → validateCouponExpiry
- → InvoiceService.create
- → DB write: invoices
-
-Candidate behavior:
-InvoiceController.store
- → validateCustomer
- → InvoiceService.create
- → DB write: invoices
-
-Impact:
-The candidate release removed validateCouponExpiry() while still creating invoices.
-
-Recommendation:
-Confirm whether coupon expiry validation was moved elsewhere.
-If intentional, approve the new baseline with compensating evidence.
 ```
 
 

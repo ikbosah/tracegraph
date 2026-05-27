@@ -1,3 +1,4 @@
+# setup the CI action
 name: CI
 
 on:

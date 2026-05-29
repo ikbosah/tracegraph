@@ -1,21 +1,25 @@
 {
   "name": "@tracegraph/trace-xdebug",
-  "version": "0.0.1",
-  "private": true,
+  "version": "0.1.0",
   "description": "Streaming Xdebug .xt trace file parser — converts Xdebug function call logs into TraceEvent streams",
   "main": "dist/index.cjs",
-  "types": "src/index.ts",
+  "module": "dist/index.js",
+  "types": "dist/index.d.ts",
   "exports": {
     ".": {
+      "import":  "./dist/index.js",
       "require": "./dist/index.cjs",
-      "import": "./dist/index.cjs",
-      "types": "./src/index.ts"
+      "types":   "./dist/index.d.ts"
     }
   },
+  "files": ["dist"],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
-    "build": "esbuild src/index.ts --bundle --format=cjs --platform=node --outfile=dist/index.cjs",
+    "build":     "tsup src/index.ts --format cjs,esm --dts --external '@tracegraph/*'",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test":      "vitest run"
   },
   "dependencies": {
     "@tracegraph/shared-types": "workspace:*",

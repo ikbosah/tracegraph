@@ -2,8 +2,27 @@
 /**
  * TraceGraph CLI entry point.
  *
- * Loads tsx so the TypeScript source runs directly — no build step required
- * during development or when linked globally via `pnpm link --global`.
+ * In production (npm install -g tracegraph) the compiled dist/ bundle is used.
+ * In development (pnpm link --global from the monorepo) tsx runs the TS source
+ * directly so no build step is required.
  */
-require('tsx/cjs');
-require('../src/index.ts');
+const path = require('path');
+const fs   = require('fs');
+
+const distEntry = path.join(__dirname, '..', 'dist', 'index.cjs');
+
+if (fs.existsSync(distEntry)) {
+  require(distEntry);
+} else {
+  // Development fallback — tsx must be available
+  try {
+    require('tsx/cjs');
+  } catch {
+    console.error(
+      'tracegraph: dist/index.cjs not found and tsx is not available.\n' +
+      'Run `pnpm build` inside packages/cli, or install tsx globally.',
+    );
+    process.exit(1);
+  }
+  require(path.join(__dirname, '..', 'src', 'index.ts'));
+}

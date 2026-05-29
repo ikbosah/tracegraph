@@ -4,6 +4,11 @@
     "type": "library",
     "license": "MIT",
     "keywords": ["tracegraph", "laravel", "tracing", "observability", "testing"],
+    "homepage": "https://github.com/ikbosah/tracegraph",
+    "support": {
+        "issues": "https://github.com/ikbosah/tracegraph/issues",
+        "source": "https://github.com/ikbosah/tracegraph/tree/main/packages/trace-laravel"
+    },
     "authors": [
         {
             "name": "TraceGraph",

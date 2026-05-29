@@ -1,18 +1,18 @@
 {
   "name": "tracegraph",
-  "version": "0.0.1",
-  "private": true,
+  "version": "0.1.0",
   "description": "CLI-first runtime assurance platform",
-  "main": "src/index.ts",
+  "main": "dist/index.cjs",
   "bin": {
     "tracegraph": "bin/tracegraph.js"
   },
+  "files": ["dist", "bin"],
   "scripts": {
-    "typecheck": "tsc --noEmit",
-    "build": "tsup src/index.ts --format cjs --outDir dist"
+    "build":     "tsup src/index.ts --format cjs --outDir dist",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@tracegraph/ai-coverage":       "workspace:*",
+    "@tracegraph/ai-coverage":      "workspace:*",
     "@tracegraph/ci-reporter":      "workspace:*",
     "@tracegraph/graph-engine":     "workspace:*",
     "@tracegraph/scenario-runner":  "workspace:*",
@@ -22,8 +22,8 @@
     "commander":                    "^12.1.0"
   },
   "devDependencies": {
-    "@tracegraph/trace-js":       "workspace:*",
-    "@tracegraph/trace-sanitizer":"workspace:*",
-    "@tracegraph/vitest":         "workspace:*"
+    "@tracegraph/trace-js":        "workspace:*",
+    "@tracegraph/trace-sanitizer": "workspace:*",
+    "@tracegraph/vitest":          "workspace:*"
   }
 }

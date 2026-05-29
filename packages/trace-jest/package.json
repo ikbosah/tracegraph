@@ -1,35 +1,39 @@
 {
   "name": "@tracegraph/jest",
-  "version": "0.0.1",
-  "private": true,
+  "version": "0.1.0",
   "description": "TraceGraph reporter for Jest — captures test structure and results as structured traces",
   "main": "dist/index.cjs",
-  "types": "src/index.ts",
+  "module": "dist/index.js",
+  "types": "dist/index.d.ts",
   "exports": {
     ".": {
+      "import":  "./dist/index.js",
       "require": "./dist/index.cjs",
-      "import": "./dist/index.cjs",
-      "types": "./src/index.ts"
+      "types":   "./dist/index.d.ts"
     }
   },
+  "files": ["dist"],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
-    "build": "esbuild src/index.ts --bundle --format=cjs --platform=node --external:@jest/reporters --external:@jest/test-result --external:@jest/types --outfile=dist/index.cjs",
+    "build":     "tsup src/index.ts --format cjs,esm --dts --external jest --external '@jest/*'",
     "typecheck": "tsc --noEmit",
-    "test": "jest --testPathPattern tests/"
+    "test":      "jest --testPathPattern tests/"
   },
   "dependencies": {
     "@tracegraph/shared-types": "workspace:*",
-    "@tracegraph/trace-core": "workspace:*"
+    "@tracegraph/trace-core":   "workspace:*"
   },
   "peerDependencies": {
     "jest": ">=27.0.0"
   },
   "devDependencies": {
-    "@jest/reporters": "^29.0.0",
+    "@jest/reporters":   "^29.0.0",
     "@jest/test-result": "^29.0.0",
-    "@jest/types": "^29.0.0",
-    "jest": "^29.0.0",
-    "@types/jest": "^29.0.0",
-    "ts-jest": "^29.0.0"
+    "@jest/types":       "^29.0.0",
+    "jest":              "^29.0.0",
+    "@types/jest":       "^29.0.0",
+    "ts-jest":           "^29.0.0"
   }
 }

@@ -1,14 +1,23 @@
 {
   "name": "@tracegraph/ai-coverage",
-  "version": "0.0.1",
-  "private": true,
-  "description": "AI Change Coverage and Prompt Pack Builder for TraceGraph (M7A)",
-  "main": "src/index.ts",
-  "types": "src/index.ts",
+  "version": "0.1.0",
+  "description": "AI Change Coverage and Prompt Pack Builder for TraceGraph",
+  "main": "dist/index.cjs",
+  "module": "dist/index.js",
+  "types": "dist/index.d.ts",
   "exports": {
-    ".": "./src/index.ts"
+    ".": {
+      "import":  "./dist/index.js",
+      "require": "./dist/index.cjs",
+      "types":   "./dist/index.d.ts"
+    }
+  },
+  "files": ["dist"],
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
+    "build":     "tsup src/index.ts --format cjs,esm --dts --external '@tracegraph/*'",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

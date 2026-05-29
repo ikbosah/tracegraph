@@ -1,0 +1,147 @@
+name: Release
+
+# Triggered by a version tag push: git tag v0.1.0 && git push --tags
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  # ── 1. Build packages and publish to npm ─────────────────────────────────────
+  npm-publish:
+    name: Publish npm packages
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # needed to create GitHub release & upload assets
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history needed for subtree split later
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: '9'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build all publishable packages
+        run: pnpm --filter './packages/*' build
+
+      - name: Publish to npm
+        run: pnpm publish -r --no-git-checks --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  # ── 2. Build and package the VS Code extension, attach to GitHub release ──────
+  vsix-publish:
+    name: Package & release VS Code extension
+    runs-on: ubuntu-latest
+    needs: npm-publish
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: '9'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build shared-types
+        run: pnpm --filter '@tracegraph/shared-types' build
+
+      - name: Build webview
+        run: pnpm --filter '@tracegraph/webview' build
+
+      - name: Copy webview assets into extension media/
+        run: |
+          mkdir -p apps/vscode-extension/media
+          cp apps/webview/dist/tracegraph-viewer.iife.js apps/vscode-extension/media/
+          cp apps/webview/dist/tracegraph-viewer.css     apps/vscode-extension/media/
+
+      - name: Typecheck extension
+        run: pnpm --filter tracegraph-vscode typecheck
+
+      - name: Webpack bundle extension
+        run: pnpm --filter tracegraph-vscode build
+
+      - name: Package VSIX
+        run: pnpm --filter tracegraph-vscode package
+
+      - name: Create GitHub release and upload VSIX
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ github.ref_name }}"
+          gh release create "$TAG" \
+            --title "TraceGraph $TAG" \
+            --generate-notes \
+            apps/vscode-extension/tracegraph-*.vsix
+
+  # ── 3. Push the Laravel package subtree to its own repo for Packagist ─────────
+  laravel-subtree:
+    name: Sync Laravel package to Packagist
+    runs-on: ubuntu-latest
+    needs: npm-publish
+    # Skip if the secrets aren't configured yet
+    if: ${{ vars.LARAVEL_SUBTREE_ENABLED == 'true' }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history required for git subtree split
+
+      - name: Configure git
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Split Laravel subtree
+        run: |
+          git subtree split \
+            --prefix packages/trace-laravel \
+            --branch laravel-split
+
+      - name: Push to tracegraph-laravel repo
+        env:
+          LARAVEL_DEPLOY_TOKEN: ${{ secrets.LARAVEL_DEPLOY_TOKEN }}
+        run: |
+          git push --force \
+            "https://x-access-token:${LARAVEL_DEPLOY_TOKEN}@github.com/ikbosah/tracegraph-laravel.git" \
+            laravel-split:main
+
+      - name: Tag the laravel repo with the release version
+        env:
+          LARAVEL_DEPLOY_TOKEN: ${{ secrets.LARAVEL_DEPLOY_TOKEN }}
+        run: |
+          TAG="${{ github.ref_name }}"
+          git push \
+            "https://x-access-token:${LARAVEL_DEPLOY_TOKEN}@github.com/ikbosah/tracegraph-laravel.git" \
+            "refs/tags/${TAG}"
+
+      - name: Notify Packagist
+        env:
+          PACKAGIST_TOKEN: ${{ secrets.PACKAGIST_TOKEN }}
+        run: |
+          curl -sf -XPOST \
+            -H 'Content-Type: application/json' \
+            "https://packagist.org/api/update-package?username=tracegraph&apiToken=${PACKAGIST_TOKEN}" \
+            -d '{"repository":{"url":"https://github.com/ikbosah/tracegraph-laravel"}}'

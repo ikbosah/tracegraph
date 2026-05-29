@@ -124,8 +124,9 @@ export class FindingsProvider implements vscode.TreeDataProvider<FindingTreeItem
         }))
         .sort((a, b) => b.mtime - a.mtime);
 
-      if (reports.length === 0) return null;
-      return JSON.parse(fs.readFileSync(reports[0].file, 'utf8')) as TraceReport;
+      const first = reports[0];
+      if (!first) return null;
+      return JSON.parse(fs.readFileSync(first.file, 'utf8')) as TraceReport;
     } catch {
       return null;
     }

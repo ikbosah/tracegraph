@@ -34,16 +34,18 @@ import { ScenariosProvider }  from './providers/scenarios-provider';
 export function activate(context: vscode.ExtensionContext): void {
   const workspaceRoot = getWorkspaceRoot();
   if (!workspaceRoot) return; // no workspace open
+  // Capture as a typed const so closures see `string`, not `string | undefined`
+  const root: string = workspaceRoot;
 
   // ── Output channel ─────────────────────────────────────────────────────────
   const outputChannel = vscode.window.createOutputChannel('TraceGraph');
   context.subscriptions.push(outputChannel);
 
   // ── Sidebar providers ───────────────────────────────────────────────────────
-  const tracesProvider    = new TracesProvider(workspaceRoot);
-  const baselinesProvider = new BaselinesProvider(workspaceRoot);
-  const findingsProvider  = new FindingsProvider(workspaceRoot);
-  const scenariosProvider = new ScenariosProvider(workspaceRoot);
+  const tracesProvider    = new TracesProvider(root);
+  const baselinesProvider = new BaselinesProvider(root);
+  const findingsProvider  = new FindingsProvider(root);
+  const scenariosProvider = new ScenariosProvider(root);
 
   context.subscriptions.push(
     vscode.window.registerTreeDataProvider('tracegraphTraces',    tracesProvider),
@@ -87,7 +89,7 @@ export function activate(context: vscode.ExtensionContext): void {
     outputChannel.show(true);
     outputChannel.appendLine(`▶ tracegraph ${args.join(' ')}`);
 
-    const runner = new CliRunner(workspaceRoot);
+    const runner = new CliRunner(root);
     activeRunner = runner;
 
     runner.onStderr((line) => outputChannel.append(line));
@@ -180,12 +182,12 @@ export function activate(context: vscode.ExtensionContext): void {
       // traceFile is passed from the tree item's command argument
       // or can be called without an argument (prompt user to pick)
       if (traceFile && fs.existsSync(traceFile)) {
-        _openTraceInPanel(traceFile, context.extensionUri, workspaceRoot);
+        _openTraceInPanel(traceFile, context.extensionUri, root);
         return;
       }
 
       // Quick-pick from available trace files
-      const tracesDir = path.join(workspaceRoot, '.tracegraph', 'traces');
+      const tracesDir = path.join(root, '.tracegraph', 'traces');
       const files     = findTraceFiles(tracesDir);
       if (files.length === 0) {
         vscode.window.showInformationMessage(
@@ -197,13 +199,13 @@ export function activate(context: vscode.ExtensionContext): void {
       vscode.window.showQuickPick(
         files.map((f) => ({
           label:       path.basename(f, '.trace.json'),
-          description: path.relative(workspaceRoot, f),
+          description: path.relative(root, f),
           file:        f,
         })),
         { placeHolder: 'Select a trace to open' },
       ).then((picked) => {
         if (picked) {
-          _openTraceInPanel(picked.file, context.extensionUri, workspaceRoot);
+          _openTraceInPanel(picked.file, context.extensionUri, root);
         }
       });
     }),
@@ -212,7 +214,7 @@ export function activate(context: vscode.ExtensionContext): void {
   // tracegraph.viewReport — opens the latest report
   context.subscriptions.push(
     vscode.commands.registerCommand('tracegraph.viewReport', () => {
-      const reportFile = resolveLatestReport(workspaceRoot);
+      const reportFile = resolveLatestReport(root);
       if (!reportFile) {
         vscode.window.showInformationMessage(
           'No report found. Run `tracegraph compare --latest` first.',
@@ -224,7 +226,7 @@ export function activate(context: vscode.ExtensionContext): void {
         vscode.window.showErrorMessage(`TraceGraph: could not read report ${reportFile}`);
         return;
       }
-      TraceGraphPanel.open(context.extensionUri, workspaceRoot, {
+      TraceGraphPanel.open(context.extensionUri, root, {
         kind: 'report',
         data: report,
       });

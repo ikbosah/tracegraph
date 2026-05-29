@@ -5,7 +5,12 @@
   "version": "0.0.1",
   "publisher": "tracegraph",
   "private": true,
-  "license": "UNLICENSED",
+  "license": "Apache License",
+  "keywords": ["tracing", "runtime", "coverage", "testing", "debugging"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ikbosah/tracegraph/"
+  },
   "engines": {
     "vscode": "^1.85.0"
   },

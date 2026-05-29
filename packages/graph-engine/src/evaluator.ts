@@ -12,6 +12,7 @@
  *   effective when that event actually appears in the candidate trace.  If the
  *   compensating function disappears, the suppression becomes invalid and the
  *   finding surfaces as "open" (Critical if the original finding was Critical).
+ * 
  */
 import type {
   Finding,

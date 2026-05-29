@@ -158,12 +158,11 @@
     "build:dev": "webpack --mode development",
     "watch":     "webpack --mode development --watch",
     "typecheck": "tsc --noEmit",
-    "package":   "vsce package"
+    "package":   "vsce package --no-dependencies"
   },
-  "dependencies": {
-    "@tracegraph/shared-types": "workspace:*"
-  },
+  "dependencies": {},
   "devDependencies": {
+    "@tracegraph/shared-types": "workspace:*",
     "@types/node":   "^20.11.0",
     "@types/vscode": "^1.85.0",
     "@vscode/vsce":  "^2.24.0",

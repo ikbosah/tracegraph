@@ -31,11 +31,10 @@ importers:
         version: 1.6.1(@types/node@20.19.41)(terser@5.48.0)
 
   apps/vscode-extension:
-    dependencies:
+    devDependencies:
       '@tracegraph/shared-types':
         specifier: workspace:*
         version: link:../../packages/shared-types
-    devDependencies:
       '@types/node':
         specifier: ^20.11.0
         version: 20.19.41

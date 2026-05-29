@@ -1,7 +1,6 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "rootDir": "src",
     "outDir": "dist",
     "paths": {
       "@tracegraph/ai-coverage":      ["../ai-coverage/src/index.ts"],

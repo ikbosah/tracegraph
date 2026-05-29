@@ -7,19 +7,19 @@
   "types": "dist/index.d.ts",
   "exports": {
     ".": {
+      "types":   "./dist/index.d.ts",
       "import":  "./dist/index.js",
-      "require": "./dist/index.cjs",
-      "types":   "./dist/index.d.ts"
+      "require": "./dist/index.cjs"
     },
     "./register": {
+      "types":   "./dist/register.d.ts",
       "import":  "./dist/register.js",
-      "require": "./dist/register.cjs",
-      "types":   "./dist/register.d.ts"
+      "require": "./dist/register.cjs"
     },
     "./register-cjs": {
+      "types":   "./dist/register-cjs.d.ts",
       "import":  "./dist/register-cjs.js",
-      "require": "./dist/register-cjs.cjs",
-      "types":   "./dist/register-cjs.d.ts"
+      "require": "./dist/register-cjs.cjs"
     }
   },
   "files": ["dist"],

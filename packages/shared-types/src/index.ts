@@ -80,7 +80,14 @@ export type TraceEventType =
   | 'lock_release'
   | 'transaction_start'
   | 'transaction_commit'
-  | 'transaction_rollback';
+  | 'transaction_rollback'
+  // ── Test runner events (M3) ───────────────────────────────────────────────
+  /** One per test file; parent = trace_start. */
+  | 'test_file'
+  /** One per describe() block; parent = test_file or enclosing test_suite. */
+  | 'test_suite'
+  /** One per it()/test() call; parent = nearest test_suite or test_file. */
+  | 'test_run';
 
 export type ConcurrencyType =
   | 'sequential'
@@ -90,7 +97,7 @@ export type ConcurrencyType =
   | 'background';
 
 export type LanguageId = 'typescript' | 'javascript' | 'php';
-export type FrameworkId = 'express' | 'nestjs' | 'nextjs' | 'fastify' | 'laravel' | 'symfony' | 'plain';
+export type FrameworkId = 'express' | 'nestjs' | 'nextjs' | 'fastify' | 'laravel' | 'symfony' | 'vitest' | 'plain';
 
 /** Cross-trace event reference for causal links (e.g. HTTP request → dispatched job). */
 export type EventRef = { traceId: string; eventId: string };
@@ -474,15 +481,41 @@ export type TraceReport = {
   summary:              ReportSummary;
 };
 
+// ─── Latest pointer (written by tracegraph run) ──────────────────────────────
+
+/**
+ * Written to `.tracegraph/latest.json` after every successful `tracegraph run`.
+ * Provides a stable, cross-platform pointer to the most recent run's artifacts
+ * without relying on symlinks (Windows-safe).
+ */
+export type LatestPointer = {
+  /** The run ID of the most recent `tracegraph run` invocation. */
+  latestRunId:    string;
+  /** All trace IDs produced by the latest run (main + per-test). */
+  latestTraceIds: string[];
+  /** Report ID written by the most recent `tracegraph compare`, or null. */
+  latestReportId: string | null;
+  /** Unix epoch ms when this file was last written. */
+  updatedAt:      number;
+};
+
 // ─── CLI exit codes ───────────────────────────────────────────────────────────
 
 export const EXIT_CODES = {
-  SUCCESS:            0,
-  COMMAND_FAILURE:    1,
-  CLI_ERROR:          2,
-  APPROVAL_REQUIRED:  3,
-  POLICY_REVIEW:      4,
-  SCHEMA_MIGRATION:   5,
+  /** Wrapped command and compare both passed cleanly. */
+  SUCCESS:                    0,
+  /** Wrapped command (npm test, etc.) exited with non-zero. */
+  COMMAND_FAILURE:            1,
+  /** Bad arguments, missing file, or internal CLI error. */
+  CLI_ERROR:                  2,
+  /** Open findings at or above the severity threshold (--fail-on-critical). */
+  FINDINGS_THRESHOLD:         3,
+  /** Suppressions file was modified since the last approved baseline. */
+  POLICY_REVIEW:              4,
+  /** Trace or baseline schema version does not match the current CLI. */
+  SCHEMA_MIGRATION:           5,
+  /** Capture level is below the project-configured minimum requirement. */
+  CAPTURE_LEVEL_INSUFFICIENT: 6,
 } as const;
 
 export type ExitCode = typeof EXIT_CODES[keyof typeof EXIT_CODES];

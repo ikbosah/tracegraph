@@ -23,6 +23,8 @@ export type GraphNodeType =
   | 'error' | 'log'
   | 'queue_event'
   | 'trace_start' | 'trace_end'
+  // ── Test runner nodes (M3) ────────────────────────────────────────────────
+  | 'test_file' | 'test_suite' | 'test_run'
   | 'vendor'
   | 'other';
 
@@ -78,6 +80,10 @@ const NODE_COLORS: Partial<Record<string, string>> = {
   trace_start:        '#94a3b8',   // slate
   trace_end:          '#94a3b8',   // slate
   log:                '#a3a3a3',   // neutral
+  // Test runner nodes — green spectrum, dimmed for skips
+  test_file:          '#4ade80',   // bright green
+  test_suite:         '#86efac',   // medium green
+  test_run:           '#bbf7d0',   // light green (pass colour; fail overridden in code)
   vendor:             '#cbd5e1',   // very light
 };
 
@@ -85,6 +91,20 @@ const DEFAULT_COLOR = '#6b7280';
 
 function getNodeColor(type: string): string {
   return NODE_COLORS[type] ?? DEFAULT_COLOR;
+}
+
+/**
+ * Returns the correct color for a node, with special handling for test_run
+ * nodes whose color depends on the test outcome (pass/fail/skip).
+ */
+function getTestAwareColor(event: TraceEvent): string {
+  if (event.type === 'test_run') {
+    const status = event.metadata?.['testStatus'] as string | undefined;
+    if (status === 'fail')  return '#ef4444';   // red
+    if (status === 'skip')  return '#d1d5db';   // light grey
+    return NODE_COLORS.test_run ?? DEFAULT_COLOR; // green for pass
+  }
+  return getNodeColor(event.type);
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -168,7 +188,7 @@ export function traceSessionToGraph(session: TraceSession): TraceGraph {
       durationMs:  event.durationMs,
       file:        event.file,
       line:        event.line,
-      color:       getNodeColor(event.type),
+      color:       getTestAwareColor(event),
       size:        computeNodeSize(event),
       data:        event,
     };

@@ -32,17 +32,24 @@ export function traceFunction<TArgs extends unknown[], TReturn>(
 ): (...args: TArgs) => TReturn {
   return function traced(this: unknown, ...args: TArgs): TReturn {
     const writer = ChildEventWriter.get();
-    if (!writer) return fn.apply(this, args);
+    const ctx    = traceStorage.getStore();
 
-    const eventId      = createEventId();
-    const parentId     = currentParentEventId();
-    const startTime    = Date.now();
+    // Skip instrumentation when neither the JSONL writer nor a traceTest event
+    // buffer is active — keeps traceFunction a zero-cost no-op in production
+    // processes launched without `tracegraph run --`.
+    if (!writer && !ctx?.eventBuffer) return fn.apply(this, args);
+
+    const traceId   = writer?.traceId ?? ctx?.traceId ?? 'unknown';
+    const runId     = writer?.runId   ?? ctx?.runId   ?? 'unknown';
+    const eventId   = createEventId();
+    const parentId  = currentParentEventId();
+    const startTime = Date.now();
 
     // ── function_call event ───────────────────────────────────────────────────
     writeEvent({
       schemaVersion: SCHEMA_VERSIONS.event,
       eventId,
-      traceId:       writer.traceId,
+      traceId,
       parentEventId: parentId,
       type:          'function_call',
       language:      'javascript',
@@ -57,7 +64,7 @@ export function traceFunction<TArgs extends unknown[], TReturn>(
       writeEvent({
         schemaVersion: SCHEMA_VERSIONS.event,
         eventId:   createEventId(),
-        traceId:   writer.traceId,
+        traceId,
         parentEventId: eventId,
         type:      'return',
         language:  'javascript',
@@ -73,7 +80,7 @@ export function traceFunction<TArgs extends unknown[], TReturn>(
       writeEvent({
         schemaVersion: SCHEMA_VERSIONS.event,
         eventId:   createEventId(),
-        traceId:   writer.traceId,
+        traceId,
         parentEventId: eventId,
         type:      'error',
         language:  'javascript',
@@ -92,11 +99,12 @@ export function traceFunction<TArgs extends unknown[], TReturn>(
     // ── Establish a new context with this call on the stack ───────────────────
     // Using traceStorage.run() ensures nested traceFunction calls correctly
     // parent to this call even when invoked outside any existing context.
-    const ctx = traceStorage.getStore();
+    // eventBuffer is propagated so traceTest can collect events from nested calls.
     const newCtx = {
-      traceId:   writer.traceId,
-      runId:     writer.runId,
-      callStack: ctx ? [...ctx.callStack, eventId] : [eventId],
+      traceId,
+      runId,
+      callStack:   ctx ? [...ctx.callStack, eventId] : [eventId],
+      eventBuffer: ctx?.eventBuffer,
     };
 
     // ── invoke fn ─────────────────────────────────────────────────────────────
@@ -153,8 +161,12 @@ export function traceMethod<TArgs extends unknown[], TReturn>(
 
   return function tracedMethod(this: unknown, ...args: TArgs): TReturn {
     const writer = ChildEventWriter.get();
-    if (!writer) return fn.apply(this, args);
+    const ctx    = traceStorage.getStore();
 
+    if (!writer && !ctx?.eventBuffer) return fn.apply(this, args);
+
+    const traceId   = writer?.traceId ?? ctx?.traceId ?? 'unknown';
+    const runId     = writer?.runId   ?? ctx?.runId   ?? 'unknown';
     const eventId   = createEventId();
     const parentId  = currentParentEventId();
     const startTime = Date.now();
@@ -162,7 +174,7 @@ export function traceMethod<TArgs extends unknown[], TReturn>(
     writeEvent({
       schemaVersion: SCHEMA_VERSIONS.event,
       eventId,
-      traceId:      writer.traceId,
+      traceId,
       parentEventId: parentId,
       type:         'method_call',
       language:     'javascript',
@@ -177,7 +189,7 @@ export function traceMethod<TArgs extends unknown[], TReturn>(
       writeEvent({
         schemaVersion: SCHEMA_VERSIONS.event,
         eventId:   createEventId(),
-        traceId:   writer.traceId,
+        traceId,
         parentEventId: eventId,
         type:      'return',
         language:  'javascript',
@@ -191,7 +203,7 @@ export function traceMethod<TArgs extends unknown[], TReturn>(
       writeEvent({
         schemaVersion: SCHEMA_VERSIONS.event,
         eventId:   createEventId(),
-        traceId:   writer.traceId,
+        traceId,
         parentEventId: eventId,
         type:      'error',
         language:  'javascript',
@@ -201,11 +213,11 @@ export function traceMethod<TArgs extends unknown[], TReturn>(
       });
     };
 
-    const ctx = traceStorage.getStore();
     const newCtx = {
-      traceId:   writer.traceId,
-      runId:     writer.runId,
-      callStack: ctx ? [...ctx.callStack, eventId] : [eventId],
+      traceId,
+      runId,
+      callStack:   ctx ? [...ctx.callStack, eventId] : [eventId],
+      eventBuffer: ctx?.eventBuffer,
     };
 
     let result!: TReturn;

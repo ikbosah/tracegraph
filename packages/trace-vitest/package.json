@@ -1,0 +1,37 @@
+{
+  "name": "@tracegraph/vitest",
+  "version": "0.0.1",
+  "private": true,
+  "description": "TraceGraph reporter for Vitest — captures test structure and results as structured traces",
+  "main": "dist/index.cjs",
+  "types": "src/index.ts",
+  "exports": {
+    ".": {
+      "require": "./dist/index.cjs",
+      "import": "./dist/index.cjs",
+      "types": "./src/index.ts"
+    },
+    "./reporter": {
+      "require": "./dist/index.cjs",
+      "types": "./src/reporter.ts"
+    }
+  },
+  "scripts": {
+    "build": "esbuild src/index.ts --bundle --format=cjs --platform=node --external:vitest --external:@tracegraph/trace-js --outfile=dist/index.cjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@tracegraph/shared-types": "workspace:*",
+    "@tracegraph/trace-core":   "workspace:*"
+  },
+  "peerDependencies": {
+    "@tracegraph/trace-js": "workspace:*",
+    "vitest": ">=1.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@tracegraph/trace-js": { "optional": true }
+  },
+  "devDependencies": {
+    "vitest": "^1.6.0"
+  }
+}

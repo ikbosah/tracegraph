@@ -12,10 +12,16 @@
     "build": "tsup src/index.ts --format cjs --outDir dist --dts"
   },
   "dependencies": {
-    "@tracegraph/ci-reporter":  "workspace:*",
-    "@tracegraph/graph-engine": "workspace:*",
-    "@tracegraph/shared-types": "workspace:*",
-    "@tracegraph/trace-core":   "workspace:*",
-    "commander":                "^12.1.0"
+    "@tracegraph/ci-reporter":    "workspace:*",
+    "@tracegraph/graph-engine":   "workspace:*",
+    "@tracegraph/shared-types":   "workspace:*",
+    "@tracegraph/trace-core":     "workspace:*",
+    "@tracegraph/trace-xdebug":   "workspace:*",
+    "commander":                  "^12.1.0"
+  },
+  "devDependencies": {
+    "@tracegraph/trace-js":       "workspace:*",
+    "@tracegraph/trace-sanitizer":"workspace:*",
+    "@tracegraph/vitest":         "workspace:*"
   }
 }

@@ -1,0 +1,405 @@
+{
+  "schemaVersion": "tracegraph.trace.v1",
+  "traceId": "trace_8f98995fb8560570",
+  "sessionId": "sess_83e48b138fc9a1e2",
+  "runId": "run_545dc7debd1fcb58",
+  "workspaceRoot": "/mnt/c/workspace/tracegraph/sample-projects/node-script",
+  "language": "javascript",
+  "entrypoint": {
+    "type": "cli_command",
+    "command": "tsx src/index.ts"
+  },
+  "startedAt": 1779896562684,
+  "endedAt": 1779896564286,
+  "status": "failed",
+  "captureLevel": {
+    "overall": 0,
+    "label": "Runner metadata only",
+    "adapters": {}
+  },
+  "events": [
+    {
+      "schemaVersion": "tracegraph.event.v1",
+      "eventId": "evt_36708309523b2905",
+      "traceId": "trace_8f98995fb8560570",
+      "parentEventId": null,
+      "type": "trace_start",
+      "language": "javascript",
+      "name": "trace_start",
+      "startTime": 1779896562684,
+      "metadata": {
+        "command": "tsx src/index.ts"
+      }
+    },
+    {
+      "schemaVersion": "tracegraph.event.v1",
+      "eventId": "evt_54b1d6cc5db1480d",
+      "traceId": "trace_8f98995fb8560570",
+      "parentEventId": "evt_36708309523b2905",
+      "type": "function_call",
+      "language": "javascript",
+      "name": "processBatch",
+      "functionName": "processBatch",
+      "startTime": 1779896564116
+    },
+    {
+      "schemaVersion": "tracegraph.event.v1",
+      "eventId": "evt_0b8769471117e559",
+      "traceId": "trace_8f98995fb8560570",
+      "parentEventId": "evt_54b1d6cc5db1480d",
+      "type": "function_call",
+      "language": "javascript",
+      "name": "processInvoice",
+      "functionName": "processInvoice",
+      "startTime": 1779896564126
+    },
+    {
+      "schemaVersion": "tracegraph.event.v1",
+      "eventId": "evt_6b92c228a3eebb98",
+      "traceId": "trace_8f98995fb8560570",
+      "parentEventId": "evt_0b8769471117e559",
+      "type": "function_call",
+      "language": "javascript",
+      "name": "validateInvoice",
+      "functionName": "validateInvoice",
+      "startTime": 1779896564133
+    },
+    {
+      "schemaVersion": "tracegraph.event.v1",
+      "eventId": "evt_cc39a56d327c2cab",
+      "traceId": "trace_8f98995fb8560570",
+      "parentEventId": "evt_6b92c228a3eebb98",
+      "type": "return",
+      "language": "javascript",
+      "name": "validateInvoice → return",
+      "startTime": 1779896564133,
+      "endTime": 1779896564139,
+      "durationMs": 6
+    },
+    {
+      "schemaVersion": "tracegraph.event.v1",
+      "eventId": "evt_c6ecb71f934664fd",
+      "traceId": "trace_8f98995fb8560570",
+      "parentEventId": "evt_0b8769471117e559",
+      "type": "function_call",
+      "language": "javascript",
+      "name": "calculateTax",
+      "functionName": "calculateTax",
+      "startTime": 1779896564144
+    },
+    {
+      "schemaVersion": "tracegraph.event.v1",
+      "eventId": "evt_90e44bf985c46069",
+      "traceId": "trace_8f98995fb8560570",
+      "parentEventId": "evt_c6ecb71f934664fd",
+      "type": "return",
+      "language": "javascript",
+      "name": "calculateTax → return",
+      "startTime": 1779896564144,
+      "endTime": 1779896564150,
+      "durationMs": 6
+    },
+    {
+      "schemaVersion": "tracegraph.event.v1",
+      "eventId": "evt_4f76a717724ab3aa",
+      "traceId": "trace_8f98995fb8560570",
+      "parentEventId": "evt_0b8769471117e559",
+      "type": "return",
+      "language": "javascript",
+      "name": "processInvoice → return",
+      "startTime": 1779896564126,
+      "endTime": 1779896564155,
+      "durationMs": 29
+    },
+    {
+      "schemaVersion": "tracegraph.event.v1",
+      "eventId": "evt_691f20d82ccd154c",
+      "traceId": "trace_8f98995fb8560570",
+      "parentEventId": "evt_54b1d6cc5db1480d",
+      "type": "function_call",
+      "language": "javascript",
+      "name": "processInvoice",
+      "functionName": "processInvoice",
+      "startTime": 1779896564159
+    },
+    {
+      "schemaVersion": "tracegraph.event.v1",
+      "eventId": "evt_2651f3795871ee82",
+      "traceId": "trace_8f98995fb8560570",
+      "parentEventId": "evt_691f20d82ccd154c",
+      "type": "function_call",
+      "language": "javascript",
+      "name": "validateInvoice",
+      "functionName": "validateInvoice",
+      "startTime": 1779896564163
+    },
+    {
+      "schemaVersion": "tracegraph.event.v1",
+      "eventId": "evt_49b482d7a4d871dd",
+      "traceId": "trace_8f98995fb8560570",
+      "parentEventId": "evt_2651f3795871ee82",
+      "type": "return",
+      "language": "javascript",
+      "name": "validateInvoice → return",
+      "startTime": 1779896564163,
+      "endTime": 1779896564167,
+      "durationMs": 4
+    },
+    {
+      "schemaVersion": "tracegraph.event.v1",
+      "eventId": "evt_d0bfc966ec2d8ff9",
+      "traceId": "trace_8f98995fb8560570",
+      "parentEventId": "evt_691f20d82ccd154c",
+      "type": "function_call",
+      "language": "javascript",
+      "name": "calculateTax",
+      "functionName": "calculateTax",
+      "startTime": 1779896564173
+    },
+    {
+      "schemaVersion": "tracegraph.event.v1",
+      "eventId": "evt_05ab7e800ba22257",
+      "traceId": "trace_8f98995fb8560570",
+      "parentEventId": "evt_d0bfc966ec2d8ff9",
+      "type": "return",
+      "language": "javascript",
+      "name": "calculateTax → return",
+      "startTime": 1779896564173,
+      "endTime": 1779896564180,
+      "durationMs": 7
+    },
+    {
+      "schemaVersion": "tracegraph.event.v1",
+      "eventId": "evt_e8357af6f5b1ff90",
+      "traceId": "trace_8f98995fb8560570",
+      "parentEventId": "evt_691f20d82ccd154c",
+      "type": "return",
+      "language": "javascript",
+      "name": "processInvoice → return",
+      "startTime": 1779896564159,
+      "endTime": 1779896564185,
+      "durationMs": 26
+    },
+    {
+      "schemaVersion": "tracegraph.event.v1",
+      "eventId": "evt_b2ff5dfb38902e16",
+      "traceId": "trace_8f98995fb8560570",
+      "parentEventId": "evt_54b1d6cc5db1480d",
+      "type": "function_call",
+      "language": "javascript",
+      "name": "processInvoice",
+      "functionName": "processInvoice",
+      "startTime": 1779896564190
+    },
+    {
+      "schemaVersion": "tracegraph.event.v1",
+      "eventId": "evt_b4e9fc0586b5e854",
+      "traceId": "trace_8f98995fb8560570",
+      "parentEventId": "evt_b2ff5dfb38902e16",
+      "type": "function_call",
+      "language": "javascript",
+      "name": "validateInvoice",
+      "functionName": "validateInvoice",
+      "startTime": 1779896564196
+    },
+    {
+      "schemaVersion": "tracegraph.event.v1",
+      "eventId": "evt_9647ebda003272e8",
+      "traceId": "trace_8f98995fb8560570",
+      "parentEventId": "evt_b4e9fc0586b5e854",
+      "type": "return",
+      "language": "javascript",
+      "name": "validateInvoice → return",
+      "startTime": 1779896564196,
+      "endTime": 1779896564202,
+      "durationMs": 6
+    },
+    {
+      "schemaVersion": "tracegraph.event.v1",
+      "eventId": "evt_59c4c3a31f7ef420",
+      "traceId": "trace_8f98995fb8560570",
+      "parentEventId": "evt_b2ff5dfb38902e16",
+      "type": "error",
+      "language": "javascript",
+      "name": "processInvoice → error",
+      "startTime": 1779896564190,
+      "endTime": 1779896564208,
+      "durationMs": 18,
+      "error": {
+        "type": "Error",
+        "message": "customerId is required",
+        "stack": "Error: customerId is required\n    at <anonymous> (/mnt/c/workspace/tracegraph/sample-projects/node-script/src/batch-processor.ts:48:13)\n    at <anonymous> (/mnt/c/workspace/tracegraph/packages/trace-js/src/trace-fn.ts:109:21)\n    at AsyncLocalStorage.run (node:internal/async_local_storage/async_hooks:91:14)\n    at traced (/mnt/c/workspace/tracegraph/packages/trace-js/src/trace-fn.ts:107:18)\n    at <anonymous> (/mnt/c/workspace/tracegraph/sample-projects/node-script/src/batch-processor.ts:88:24)\n    at <anonymous> (/mnt/c/workspace/tracegraph/packages/trace-js/src/trace-fn.ts:109:21)\n    at AsyncLocalStorage.run (node:internal/async_local_storage/async_hooks:91:14)\n    at traced (/mnt/c/workspace/tracegraph/packages/trace-js/src/trace-fn.ts:107:18)\n    at main (/mnt/c/workspace/tracegraph/sample-projects/node-script/src/index.ts:18:18)\n    at <anonymous> (/mnt/c/workspace/tracegraph/sample-projects/node-script/src/index.ts:40:1)"
+      }
+    },
+    {
+      "schemaVersion": "tracegraph.event.v1",
+      "eventId": "evt_0687250221bb25a9",
+      "traceId": "trace_8f98995fb8560570",
+      "parentEventId": "evt_54b1d6cc5db1480d",
+      "type": "function_call",
+      "language": "javascript",
+      "name": "processInvoice",
+      "functionName": "processInvoice",
+      "startTime": 1779896564217
+    },
+    {
+      "schemaVersion": "tracegraph.event.v1",
+      "eventId": "evt_3286de0fd9613a8b",
+      "traceId": "trace_8f98995fb8560570",
+      "parentEventId": "evt_0687250221bb25a9",
+      "type": "function_call",
+      "language": "javascript",
+      "name": "validateInvoice",
+      "functionName": "validateInvoice",
+      "startTime": 1779896564221
+    },
+    {
+      "schemaVersion": "tracegraph.event.v1",
+      "eventId": "evt_9584bd0431059bc6",
+      "traceId": "trace_8f98995fb8560570",
+      "parentEventId": "evt_3286de0fd9613a8b",
+      "type": "return",
+      "language": "javascript",
+      "name": "validateInvoice → return",
+      "startTime": 1779896564221,
+      "endTime": 1779896564228,
+      "durationMs": 7
+    },
+    {
+      "schemaVersion": "tracegraph.event.v1",
+      "eventId": "evt_37f20bd052c2a00a",
+      "traceId": "trace_8f98995fb8560570",
+      "parentEventId": "evt_0687250221bb25a9",
+      "type": "error",
+      "language": "javascript",
+      "name": "processInvoice → error",
+      "startTime": 1779896564217,
+      "endTime": 1779896564233,
+      "durationMs": 16,
+      "error": {
+        "type": "Error",
+        "message": "amount must be positive (got -100)",
+        "stack": "Error: amount must be positive (got -100)\n    at <anonymous> (/mnt/c/workspace/tracegraph/sample-projects/node-script/src/batch-processor.ts:48:13)\n    at <anonymous> (/mnt/c/workspace/tracegraph/packages/trace-js/src/trace-fn.ts:109:21)\n    at AsyncLocalStorage.run (node:internal/async_local_storage/async_hooks:91:14)\n    at traced (/mnt/c/workspace/tracegraph/packages/trace-js/src/trace-fn.ts:107:18)\n    at <anonymous> (/mnt/c/workspace/tracegraph/sample-projects/node-script/src/batch-processor.ts:88:24)\n    at <anonymous> (/mnt/c/workspace/tracegraph/packages/trace-js/src/trace-fn.ts:109:21)\n    at AsyncLocalStorage.run (node:internal/async_local_storage/async_hooks:91:14)\n    at traced (/mnt/c/workspace/tracegraph/packages/trace-js/src/trace-fn.ts:107:18)\n    at main (/mnt/c/workspace/tracegraph/sample-projects/node-script/src/index.ts:18:18)\n    at <anonymous> (/mnt/c/workspace/tracegraph/sample-projects/node-script/src/index.ts:40:1)"
+      }
+    },
+    {
+      "schemaVersion": "tracegraph.event.v1",
+      "eventId": "evt_5b359f6f69721a09",
+      "traceId": "trace_8f98995fb8560570",
+      "parentEventId": "evt_54b1d6cc5db1480d",
+      "type": "function_call",
+      "language": "javascript",
+      "name": "processInvoice",
+      "functionName": "processInvoice",
+      "startTime": 1779896564238
+    },
+    {
+      "schemaVersion": "tracegraph.event.v1",
+      "eventId": "evt_33565a865d4a8942",
+      "traceId": "trace_8f98995fb8560570",
+      "parentEventId": "evt_5b359f6f69721a09",
+      "type": "function_call",
+      "language": "javascript",
+      "name": "validateInvoice",
+      "functionName": "validateInvoice",
+      "startTime": 1779896564242
+    },
+    {
+      "schemaVersion": "tracegraph.event.v1",
+      "eventId": "evt_da59a10babe126bd",
+      "traceId": "trace_8f98995fb8560570",
+      "parentEventId": "evt_33565a865d4a8942",
+      "type": "return",
+      "language": "javascript",
+      "name": "validateInvoice → return",
+      "startTime": 1779896564242,
+      "endTime": 1779896564246,
+      "durationMs": 4
+    },
+    {
+      "schemaVersion": "tracegraph.event.v1",
+      "eventId": "evt_71722fe426432c04",
+      "traceId": "trace_8f98995fb8560570",
+      "parentEventId": "evt_5b359f6f69721a09",
+      "type": "function_call",
+      "language": "javascript",
+      "name": "calculateTax",
+      "functionName": "calculateTax",
+      "startTime": 1779896564251
+    },
+    {
+      "schemaVersion": "tracegraph.event.v1",
+      "eventId": "evt_8bfa836430cf169c",
+      "traceId": "trace_8f98995fb8560570",
+      "parentEventId": "evt_71722fe426432c04",
+      "type": "return",
+      "language": "javascript",
+      "name": "calculateTax → return",
+      "startTime": 1779896564251,
+      "endTime": 1779896564256,
+      "durationMs": 5
+    },
+    {
+      "schemaVersion": "tracegraph.event.v1",
+      "eventId": "evt_038d609b857d2d14",
+      "traceId": "trace_8f98995fb8560570",
+      "parentEventId": "evt_5b359f6f69721a09",
+      "type": "return",
+      "language": "javascript",
+      "name": "processInvoice → return",
+      "startTime": 1779896564238,
+      "endTime": 1779896564259,
+      "durationMs": 21
+    },
+    {
+      "schemaVersion": "tracegraph.event.v1",
+      "eventId": "evt_71809af753cc15e7",
+      "traceId": "trace_8f98995fb8560570",
+      "parentEventId": "evt_54b1d6cc5db1480d",
+      "type": "function_call",
+      "language": "javascript",
+      "name": "generateSummary",
+      "functionName": "generateSummary",
+      "startTime": 1779896564262
+    },
+    {
+      "schemaVersion": "tracegraph.event.v1",
+      "eventId": "evt_b3904064ad0b3b23",
+      "traceId": "trace_8f98995fb8560570",
+      "parentEventId": "evt_71809af753cc15e7",
+      "type": "return",
+      "language": "javascript",
+      "name": "generateSummary → return",
+      "startTime": 1779896564262,
+      "endTime": 1779896564266,
+      "durationMs": 4
+    },
+    {
+      "schemaVersion": "tracegraph.event.v1",
+      "eventId": "evt_8b5c63c838207b20",
+      "traceId": "trace_8f98995fb8560570",
+      "parentEventId": "evt_54b1d6cc5db1480d",
+      "type": "return",
+      "language": "javascript",
+      "name": "processBatch → return",
+      "startTime": 1779896564116,
+      "endTime": 1779896564272,
+      "durationMs": 156
+    },
+    {
+      "schemaVersion": "tracegraph.event.v1",
+      "eventId": "evt_a616a819f2edef3d",
+      "traceId": "trace_8f98995fb8560570",
+      "parentEventId": "evt_36708309523b2905",
+      "type": "trace_end",
+      "language": "javascript",
+      "name": "trace_end",
+      "startTime": 1779896564286,
+      "endTime": 1779896564286,
+      "durationMs": 1602,
+      "metadata": {
+        "exitCode": 1
+      }
+    }
+  ]
+}

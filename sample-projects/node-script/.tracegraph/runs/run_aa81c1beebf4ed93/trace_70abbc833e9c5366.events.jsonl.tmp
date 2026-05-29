@@ -1,0 +1,2 @@
+{"schemaVersion":"tracegraph.event.v1","eventId":"evt_f73df37cedc892a1","traceId":"trace_70abbc833e9c5366","parentEventId":null,"type":"trace_start","language":"javascript","name":"trace_start","startTime":1779897946466,"metadata":{"command":"pnpm test"}}
+{"schemaVersion":"tracegraph.event.v1","eventId":"evt_5bddeadaae0a0c78","traceId":"trace_70abbc833e9c5366","parentEventId":"evt_f73df37cedc892a1","type":"trace_end","language":"javascript","name":"trace_end","startTime":1779897957529,"endTime":1779897957529,"durationMs":11063,"metadata":{"exitCode":0}}

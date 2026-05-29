@@ -1,0 +1,38 @@
+{
+  "schemaVersion": "tracegraph.index.v1",
+  "traces": [
+    {
+      "traceId": "trace_0b2f1230d4e3d06b",
+      "runId": "run_e88dd9e76a9b99c7",
+      "file": ".tracegraph/traces/trace_0b2f1230d4e3d06b.trace.json",
+      "status": "failed",
+      "createdAt": 1779897900077,
+      "entrypoint": {
+        "type": "cli_command",
+        "command": "tsx src/index.ts"
+      }
+    },
+    {
+      "traceId": "trace_10b4aa224d3ec42f",
+      "runId": "run_0f456b3977be0d77",
+      "file": ".tracegraph/traces/trace_10b4aa224d3ec42f.trace.json",
+      "status": "failed",
+      "createdAt": 1779897079886,
+      "entrypoint": {
+        "type": "cli_command",
+        "command": "pnpm test"
+      }
+    },
+    {
+      "traceId": "trace_8f98995fb8560570",
+      "runId": "run_545dc7debd1fcb58",
+      "file": ".tracegraph/traces/trace_8f98995fb8560570.trace.json",
+      "status": "failed",
+      "createdAt": 1779896562684,
+      "entrypoint": {
+        "type": "cli_command",
+        "command": "tsx src/index.ts"
+      }
+    }
+  ]
+}

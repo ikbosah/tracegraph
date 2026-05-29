@@ -79,6 +79,18 @@ export function subscribeUndiciChannel(): void {
 let fetchPatched = false;
 
 /**
+ * Resets the module-level idempotency flags so tests can re-exercise
+ * `patchGlobalFetch()` and `subscribeUndiciChannel()` independently.
+ * Never call this in production code.
+ *
+ * @internal
+ */
+export function _resetHttpPatchForTest(): void {
+  fetchPatched     = false;
+  undiciSubscribed = false;
+}
+
+/**
  * Wraps `globalThis.fetch` to inject the TraceGraph correlation header
  * and emit `external_http_call` events.
  *

@@ -29,6 +29,12 @@ import {
   findingSuppressCommand,
 } from './commands/finding';
 import { reportCommand }       from './commands/report';
+import { diagnoseCommand }     from './commands/diagnose';
+import { importXdebugCommand }  from './commands/import-xdebug';
+import {
+  schemaDoctorCommand,
+  baselineMigrateCommand,
+} from './commands/schema';
 
 // ── Extract the wrapped command (everything after --) ─────────────────────
 const rawArgv     = process.argv.slice(2); // strip 'node' and script path
@@ -40,7 +46,7 @@ const program = new Command();
 
 program
   .name('tracegraph')
-  .description('CLI-first runtime assurance platform')
+  .description('Capture how code actually behaves during tests, scenarios, and local development runs, then produces trace files, behavior graphs, baselines, diffs, findings, and reports that help code reviewers with with runtime evidence of code changes.')
   .version('0.0.1');
 
 // ── tracegraph run [options] -- <command> ─────────────────────────────────
@@ -59,11 +65,18 @@ const baselineCmd = program.command('baseline').description('Manage behaviour ba
 
 baselineCmd
   .command('create')
-  .description('Create baselines from the latest trace files')
+  .description('Create baselines from traces (defaults to latest run)')
   .option('--reason <reason>',      'Approval reason (non-interactive mode)')
   .option('--approved-by <name>',   'Approver name (defaults to current user)')
   .option('--all',                  'Overwrite existing baselines')
-  .action((options: { reason?: string; approvedBy?: string; all?: boolean }) => {
+  .option('--latest-run',           'Use traces from the most recent run (default)')
+  .option('--run-id <id>',          'Use traces from a specific run ID')
+  .option('--all-traces',           'Use ALL traces in .tracegraph/traces/ (overrides default scope)')
+  .option('--only-passed',          'Skip traces whose status is not "passed"')
+  .action((options: {
+    reason?: string; approvedBy?: string; all?: boolean;
+    latestRun?: boolean; runId?: string; allTraces?: boolean; onlyPassed?: boolean;
+  }) => {
     process.exit(baselineCreateCommand(options));
   });
 
@@ -72,6 +85,14 @@ baselineCmd
   .description('List all stored baselines')
   .action(() => {
     process.exit(baselineListCommand());
+  });
+
+baselineCmd
+  .command('migrate')
+  .description('Migrate baseline files to the current schema version')
+  .option('--dry-run', 'Show what would be migrated without writing changes')
+  .action((options: { dryRun?: boolean }) => {
+    process.exit(baselineMigrateCommand(options));
   });
 
 baselineCmd
@@ -89,10 +110,11 @@ program
   .command('compare')
   .description('Compare candidate traces against baselines and produce a report')
   .option('--baseline <dir>',     'Directory containing baseline files')
-  .option('--candidate <file>',   'Candidate trace file or directory (default: .tracegraph/traces/)')
+  .option('--candidate <file>',   'Candidate trace file or directory (default: latest run)')
   .option('--out <file>',         'Output path for the report JSON')
-  .option('--fail-on-critical',   'Exit 1 if any critical findings are open')
-  .action((options: { baseline?: string; candidate?: string; out?: string; failOnCritical?: boolean }) => {
+  .option('--latest',             'Compare only traces from the most recent run (reads .tracegraph/latest.json)')
+  .option('--fail-on-critical',   'Exit 3 if any critical findings are open')
+  .action((options: { baseline?: string; candidate?: string; out?: string; latest?: boolean; failOnCritical?: boolean }) => {
     process.exit(compareCommand(options));
   });
 
@@ -171,6 +193,47 @@ program
   .action(() => {
     initCommand();
     process.exit(EXIT_CODES.SUCCESS);
+  });
+
+// ── tracegraph diagnose ───────────────────────────────────────────────────
+program
+  .command('diagnose')
+  .description('Show what is being captured and how to improve the capture level')
+  .option('--trace <traceId>', 'Diagnose a specific trace by ID or file path')
+  .option('--json',            'Output as JSON instead of human-readable text')
+  .action((options: { trace?: string; json?: boolean }) => {
+    process.exit(diagnoseCommand(options));
+  });
+
+// ── tracegraph schema ─────────────────────────────────────────────────────
+const schemaCmd = program.command('schema').description('Inspect and migrate TraceGraph artifact schemas');
+
+schemaCmd
+  .command('doctor')
+  .description('Scan local artifacts for schema version mismatches')
+  .option('--json', 'Output report as JSON instead of human-readable text')
+  .action((options: { json?: boolean }) => {
+    process.exit(schemaDoctorCommand(options));
+  });
+
+// ── tracegraph import ─────────────────────────────────────────────────────
+const importCmd = program.command('import').description('Import traces from external tools');
+
+importCmd
+  .command('xdebug')
+  .description('Import an Xdebug .xt trace file, optionally merging with a Laravel semantic trace')
+  .argument('<file>', 'Path to the Xdebug .xt trace file')
+  .option('--semantic <file>',    'Path to a Laravel semantic JSONL trace to merge with')
+  .option('--include <pattern>',  'Only include functions whose file path matches this pattern')
+  .option('--max-events <n>',     'Maximum number of events to emit (default: 10000)', parseInt)
+  .option('--out-dir <dir>',      'Output directory (default: .tracegraph/traces/)')
+  .action(async (file: string, options: {
+    semantic?:   string;
+    include?:    string;
+    maxEvents?:  number;
+    outDir?:     string;
+  }) => {
+    process.exit(await importXdebugCommand(file, options));
   });
 
 // ── tracegraph clean ──────────────────────────────────────────────────────

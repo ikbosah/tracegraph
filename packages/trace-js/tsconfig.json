@@ -2,7 +2,15 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "outDir": "dist",
-    "rootDir": "src"
+    "rootDir": "src",
+    "paths": {
+      "@tracegraph/shared-types":     ["../shared-types/src/index.ts"],
+      "@tracegraph/shared-types/*":   ["../shared-types/src/*"],
+      "@tracegraph/trace-core":       ["../trace-core/src/index.ts"],
+      "@tracegraph/trace-core/*":     ["../trace-core/src/*"],
+      "@tracegraph/trace-sanitizer":  ["../trace-sanitizer/src/index.ts"],
+      "@tracegraph/trace-sanitizer/*":["../trace-sanitizer/src/*"]
+    }
   },
   "include": ["src"]
 }

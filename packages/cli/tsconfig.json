@@ -4,8 +4,14 @@
     "rootDir": "src",
     "outDir": "dist",
     "paths": {
-      "@tracegraph/shared-types": ["../shared-types/src/index.ts"],
-      "@tracegraph/trace-core":   ["../trace-core/src/index.ts"]
+      "@tracegraph/shared-types":    ["../shared-types/src/index.ts"],
+      "@tracegraph/trace-core":      ["../trace-core/src/index.ts"],
+      "@tracegraph/trace-js":        ["../trace-js/src/index.ts"],
+      "@tracegraph/trace-js/*":      ["../trace-js/src/*"],
+      "@tracegraph/trace-sanitizer": ["../trace-sanitizer/src/index.ts"],
+      "@tracegraph/graph-engine":    ["../graph-engine/src/index.ts"],
+      "@tracegraph/ci-reporter":     ["../ci-reporter/src/index.ts"],
+      "@tracegraph/vitest":          ["../trace-vitest/src/index.ts"]
     }
   },
   "include": ["src/**/*", "tests/**/*", "bin/**/*"]

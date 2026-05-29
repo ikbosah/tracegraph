@@ -96,7 +96,7 @@ function addPackageJsonScripts(cwd: string, pm: PackageManager, testRunner: stri
   const newScripts: Record<string, string> = {
     'trace:test':     `tracegraph run -- ${pm} run ${testRunner}`,
     'trace:baseline': 'tracegraph baseline create',
-    'trace:compare':  'tracegraph compare --baseline .tracegraph/baselines --candidate .tracegraph/latest',
+    'trace:compare':  'tracegraph compare',
     'trace:report':   'tracegraph open --html .tracegraph/reports/latest.report.json',
   };
 

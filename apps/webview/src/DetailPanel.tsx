@@ -1,8 +1,10 @@
-import React from 'react';
+import React, { useState } from 'react';
 import type { GraphNode } from '@tracegraph/graph-engine';
+import type { TraceEvent } from '@tracegraph/shared-types';
 
 interface DetailPanelProps {
-  node: GraphNode | null;
+  node:       GraphNode   | null;
+  allEvents?: TraceEvent[];
 }
 
 const TYPE_COLORS: Record<string, string> = {
@@ -37,7 +39,83 @@ function JsonBlock({ value }: { value: unknown }): React.ReactElement {
   );
 }
 
-export function DetailPanel({ node }: DetailPanelProps): React.ReactElement {
+// ─── Xdebug call stack ────────────────────────────────────────────────────────
+
+interface XdebugStackProps {
+  xdebugEvents: TraceEvent[];
+}
+
+function XdebugCallStack({ xdebugEvents }: XdebugStackProps): React.ReactElement {
+  const [open, setOpen] = useState(true);
+
+  // Compute base depth so indentation is relative
+  const depths = xdebugEvents.map(
+    (e) => ((e.metadata as Record<string, unknown> | undefined)?.xdebugDepth as number) ?? 0,
+  );
+  const minDepth = depths.length > 0 ? Math.min(...depths) : 0;
+
+  return (
+    <div className="detail-section xdebug-section">
+      <button
+        className="xdebug-stack-toggle"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+      >
+        <span className="detail-section-title" style={{ marginBottom: 0 }}>
+          Xdebug Call Stack
+        </span>
+        <span className="xdebug-count">{xdebugEvents.length} calls</span>
+        <span className="xdebug-chevron">{open ? '▾' : '▸'}</span>
+      </button>
+
+      {open && (
+        <div className="xdebug-stack">
+          {xdebugEvents.map((e, i) => {
+            const meta   = (e.metadata as Record<string, unknown> | undefined) ?? {};
+            const depth  = ((meta.xdebugDepth as number) ?? minDepth) - minDepth;
+            const score  = meta.correlationScore as number | undefined;
+            const indent = depth * 14; // 14px per depth level
+
+            // Short filename
+            const filePart = e.file
+              ? e.file.replace(/^.*[/\\]/, '')  // basename only
+              : null;
+            const location = filePart
+              ? `${filePart}${e.line != null ? `:${e.line}` : ''}`
+              : null;
+
+            return (
+              <div
+                key={e.eventId ?? i}
+                className="xdebug-call"
+                style={{ paddingLeft: 8 + indent }}
+              >
+                <span className="xdebug-fn">{e.name}</span>
+                {location && (
+                  <span className="xdebug-loc" title={e.file ?? ''}>
+                    {location}
+                  </span>
+                )}
+                {score != null && score < 1.0 && (
+                  <span
+                    className="xdebug-confidence"
+                    title={`Correlation confidence: ${(score * 100).toFixed(0)}%`}
+                  >
+                    ~{(score * 100).toFixed(0)}%
+                  </span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Main panel ───────────────────────────────────────────────────────────────
+
+export function DetailPanel({ node, allEvents }: DetailPanelProps): React.ReactElement {
   if (!node) {
     return (
       <div className="detail-empty">
@@ -46,13 +124,24 @@ export function DetailPanel({ node }: DetailPanelProps): React.ReactElement {
     );
   }
 
-  const event  = node.data;
-  const color  = TYPE_COLORS[node.type] ?? '#6b7280';
-  const dur    = event.durationMs != null
+  const event = node.data;
+  const color = TYPE_COLORS[node.type] ?? '#6b7280';
+  const dur   = event.durationMs != null
     ? event.durationMs >= 1000
       ? `${(event.durationMs / 1000).toFixed(2)}s`
       : `${event.durationMs.toFixed(1)}ms`
     : null;
+
+  // Collect Xdebug child events for this node
+  const xdebugChildren: TraceEvent[] = allEvents
+    ? allEvents
+        .filter(
+          (e) =>
+            (e as unknown as { framework: string }).framework === 'xdebug' &&
+            e.parentEventId === event.eventId,
+        )
+        .sort((a, b) => a.startTime - b.startTime)
+    : [];
 
   return (
     <>
@@ -86,9 +175,14 @@ export function DetailPanel({ node }: DetailPanelProps): React.ReactElement {
             }
           />
         )}
-        {event.className  && <KVRow k="Class"    v={event.className} />}
+        {event.className    && <KVRow k="Class"    v={event.className} />}
         {event.functionName && <KVRow k="Function" v={event.functionName} />}
       </div>
+
+      {/* Xdebug call stack — shown when Xdebug child events exist */}
+      {xdebugChildren.length > 0 && (
+        <XdebugCallStack xdebugEvents={xdebugChildren} />
+      )}
 
       {/* Error */}
       {event.error && (

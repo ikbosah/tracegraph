@@ -1,0 +1,45 @@
+{
+    "name": "tracegraph/laravel",
+    "description": "TraceGraph instrumentation for Laravel — captures HTTP, DB, and auth events as structured traces",
+    "type": "library",
+    "license": "MIT",
+    "keywords": ["tracegraph", "laravel", "tracing", "observability", "testing"],
+    "authors": [
+        {
+            "name": "TraceGraph",
+            "email": "hello@tracegraph.dev"
+        }
+    ],
+    "require": {
+        "php": "^8.1",
+        "illuminate/contracts": "^10.0|^11.0|^12.0",
+        "illuminate/http": "^10.0|^11.0|^12.0",
+        "illuminate/support": "^10.0|^11.0|^12.0"
+    },
+    "require-dev": {
+        "orchestra/testbench": "^8.0|^9.0",
+        "phpunit/phpunit": "^10.0|^11.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Tracegraph\\Laravel\\": "src/"
+        },
+        "files": [
+            "helpers.php"
+        ]
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Tracegraph\\Laravel\\Tests\\": "tests/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Tracegraph\\Laravel\\TraceServiceProvider"
+            ]
+        }
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}

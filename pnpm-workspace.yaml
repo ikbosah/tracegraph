@@ -3,3 +3,5 @@ packages:
   - 'apps/*'
   - 'sample-projects/*'
   - 'integrations/*'
+allowBuilds:
+  esbuild: false

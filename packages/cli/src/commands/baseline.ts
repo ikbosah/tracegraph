@@ -8,7 +8,7 @@
 import fs   from 'fs';
 import path from 'path';
 import { EXIT_CODES, SCHEMA_VERSIONS } from '@tracegraph/shared-types';
-import type { TraceSession, CompactBaseline } from '@tracegraph/shared-types';
+import type { TraceSession, CompactBaseline, LatestPointer } from '@tracegraph/shared-types';
 import { sessionToBaseline, deriveTestId } from '@tracegraph/graph-engine';
 
 // ─── baseline create ──────────────────────────────────────────────────────────
@@ -16,7 +16,16 @@ import { sessionToBaseline, deriveTestId } from '@tracegraph/graph-engine';
 export type BaselineCreateOptions = {
   reason?:     string;
   approvedBy?: string;
+  /** Overwrite all existing baselines (legacy / explicit override). */
   all?:        boolean;
+  /** Use ALL traces in .tracegraph/traces/ regardless of run. Overrides default. */
+  allTraces?:  boolean;
+  /** Scope to traces from the latest run recorded in .tracegraph/latest.json (default). */
+  latestRun?:  boolean;
+  /** Scope to traces from a specific run ID. */
+  runId?:      string;
+  /** Skip traces whose status is not 'passed'. */
+  onlyPassed?: boolean;
 };
 
 export function baselineCreateCommand(options: BaselineCreateOptions): number {
@@ -32,12 +41,12 @@ export function baselineCreateCommand(options: BaselineCreateOptions): number {
     return EXIT_CODES.CLI_ERROR;
   }
 
-  const traceFiles = fs.readdirSync(tracesDir)
-    .filter((f) => f.endsWith('.trace.json'))
-    .map((f) => path.join(tracesDir, f));
+  // ── Resolve the trace files to baseline ──────────────────────────────────
+  const traceFiles = resolveTraceFiles(tracesDir, tracegraphDir, options);
 
   if (traceFiles.length === 0) {
-    process.stderr.write('[tracegraph] No .trace.json files found in .tracegraph/traces/\n');
+    process.stderr.write('[tracegraph] No .trace.json files found for the selected scope.\n');
+    process.stderr.write('  Try: tracegraph baseline create --all-traces\n');
     return EXIT_CODES.CLI_ERROR;
   }
 
@@ -94,6 +103,102 @@ export function baselineCreateCommand(options: BaselineCreateOptions): number {
     `\n[tracegraph] baseline create: ${created} created, ${skipped} skipped\n`,
   );
   return EXIT_CODES.SUCCESS;
+}
+
+// ─── Helpers — trace file resolution ─────────────────────────────────────────
+
+/**
+ * Resolves which .trace.json files should be baselined, based on the
+ * provided options:
+ *
+ *  --all-traces     → all files in .tracegraph/traces/
+ *  --run-id <id>    → traces whose session.runId matches
+ *  --latest-run     → traces listed in .tracegraph/latest.json
+ *  (default)        → same as --latest-run; falls back to all traces with a warning
+ *  --only-passed    → applied as a post-filter on any of the above
+ */
+function resolveTraceFiles(
+  tracesDir:     string,
+  tracegraphDir: string,
+  options:       BaselineCreateOptions,
+): string[] {
+  let files: string[];
+
+  if (options.allTraces) {
+    // Explicit override: use everything
+    files = allTraceFiles(tracesDir);
+    process.stdout.write(`[tracegraph] Scoping to ALL ${files.length} trace(s) in .tracegraph/traces/\n`);
+
+  } else if (options.runId) {
+    // Filter by run ID — load each file and check session.runId
+    const allFiles = allTraceFiles(tracesDir);
+    files = allFiles.filter((f) => {
+      try {
+        const session = JSON.parse(fs.readFileSync(f, 'utf8')) as TraceSession;
+        return session.runId === options.runId;
+      } catch { return false; }
+    });
+    process.stdout.write(
+      `[tracegraph] Scoping to run ${options.runId}: ${files.length} trace(s) found.\n`,
+    );
+
+  } else {
+    // Default: use latest.json if available
+    const latestPath = path.join(tracegraphDir, 'latest.json');
+    if (fs.existsSync(latestPath)) {
+      try {
+        const ptr = JSON.parse(fs.readFileSync(latestPath, 'utf8')) as LatestPointer;
+        const resolved = ptr.latestTraceIds
+          .map((id) => path.join(tracesDir, `${id}.trace.json`))
+          .filter((p) => fs.existsSync(p));
+        if (resolved.length > 0) {
+          process.stdout.write(
+            `[tracegraph] Scoping to latest run ${ptr.latestRunId} ` +
+            `(${resolved.length} trace(s)). Use --all-traces to baseline everything.\n`,
+          );
+          files = resolved;
+        } else {
+          process.stderr.write(
+            '[tracegraph] latest.json found but no matching trace files — falling back to all traces.\n',
+          );
+          files = allTraceFiles(tracesDir);
+        }
+      } catch {
+        files = allTraceFiles(tracesDir);
+      }
+    } else {
+      // No latest.json yet — fall back to all traces with an advisory
+      process.stderr.write(
+        '[tracegraph] .tracegraph/latest.json not found. ' +
+        'Baseline will include ALL traces in .tracegraph/traces/.\n' +
+        '  Run `tracegraph run -- <command>` first to create a latest.json pointer.\n',
+      );
+      files = allTraceFiles(tracesDir);
+    }
+  }
+
+  // --only-passed post-filter
+  if (options.onlyPassed) {
+    const before = files.length;
+    files = files.filter((f) => {
+      try {
+        const session = JSON.parse(fs.readFileSync(f, 'utf8')) as TraceSession;
+        return session.status === 'passed';
+      } catch { return false; }
+    });
+    const skipped = before - files.length;
+    if (skipped > 0) {
+      process.stdout.write(`[tracegraph] --only-passed: skipped ${skipped} non-passing trace(s).\n`);
+    }
+  }
+
+  return files;
+}
+
+function allTraceFiles(tracesDir: string): string[] {
+  return fs.readdirSync(tracesDir)
+    .filter((f) => f.endsWith('.trace.json'))
+    .map((f) => path.join(tracesDir, f));
 }
 
 // ─── baseline list ────────────────────────────────────────────────────────────

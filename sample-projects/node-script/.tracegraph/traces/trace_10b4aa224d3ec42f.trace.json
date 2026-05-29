@@ -1,0 +1,50 @@
+{
+  "schemaVersion": "tracegraph.trace.v1",
+  "traceId": "trace_10b4aa224d3ec42f",
+  "sessionId": "sess_05671745dc317094",
+  "runId": "run_0f456b3977be0d77",
+  "workspaceRoot": "/mnt/c/workspace/tracegraph/sample-projects/node-script",
+  "language": "javascript",
+  "entrypoint": {
+    "type": "cli_command",
+    "command": "pnpm test"
+  },
+  "startedAt": 1779897079886,
+  "endedAt": 1779897082514,
+  "status": "failed",
+  "captureLevel": {
+    "overall": 0,
+    "label": "Runner metadata only",
+    "adapters": {}
+  },
+  "events": [
+    {
+      "schemaVersion": "tracegraph.event.v1",
+      "eventId": "evt_e428d4899c93be01",
+      "traceId": "trace_10b4aa224d3ec42f",
+      "parentEventId": null,
+      "type": "trace_start",
+      "language": "javascript",
+      "name": "trace_start",
+      "startTime": 1779897079886,
+      "metadata": {
+        "command": "pnpm test"
+      }
+    },
+    {
+      "schemaVersion": "tracegraph.event.v1",
+      "eventId": "evt_cb719c0e8d91b156",
+      "traceId": "trace_10b4aa224d3ec42f",
+      "parentEventId": "evt_e428d4899c93be01",
+      "type": "trace_end",
+      "language": "javascript",
+      "name": "trace_end",
+      "startTime": 1779897082514,
+      "endTime": 1779897082514,
+      "durationMs": 2628,
+      "metadata": {
+        "exitCode": 1
+      }
+    }
+  ]
+}

@@ -22,6 +22,7 @@ import type {
   FindingSeverity,
   SuppressionsFile,
   FindingApprovalsFile,
+  LatestPointer,
 } from '@tracegraph/shared-types';
 import { diffBaseline, diffToFindings, evaluateFindings } from '@tracegraph/graph-engine';
 import { findBaselineForSession } from './baseline';
@@ -32,6 +33,8 @@ export type CompareOptions = {
   candidate?:     string;
   out?:           string;
   failOnCritical?: boolean;
+  /** Use traces from the most recent run recorded in .tracegraph/latest.json. */
+  latest?:        boolean;
 };
 
 export function compareCommand(options: CompareOptions): number {
@@ -42,7 +45,7 @@ export function compareCommand(options: CompareOptions): number {
     : path.join(tracegraphDir, 'baselines');
 
   // ── Resolve candidate trace files ────────────────────────────────────────
-  const candidateFiles = resolveCandidateFiles(options.candidate, tracegraphDir, cwd);
+  const candidateFiles = resolveCandidateFiles(options.candidate, tracegraphDir, cwd, options.latest);
   if (candidateFiles.length === 0) {
     process.stderr.write(
       '[tracegraph] No candidate traces found. ' +
@@ -177,9 +180,12 @@ export function compareCommand(options: CompareOptions): number {
     },
   });
 
+  // ── Write back reportId to latest.json ───────────────────────────────────
+  updateLatestReport(tracegraphDir, report.reportId);
+
   // Exit codes
   if (suppressionsModified) return EXIT_CODES.POLICY_REVIEW;
-  if (hasOpenCritical && options.failOnCritical) return EXIT_CODES.COMMAND_FAILURE;
+  if (hasOpenCritical && options.failOnCritical) return EXIT_CODES.FINDINGS_THRESHOLD;
   return EXIT_CODES.SUCCESS;
 }
 
@@ -187,10 +193,32 @@ export function compareCommand(options: CompareOptions): number {
 
 const SEVERITY_ORDER: FindingSeverity[] = ['critical', 'high', 'medium', 'low', 'info'];
 
+/** Update latest.json with the reportId produced by this compare run. */
+function updateLatestReport(tracegraphDir: string, reportId: string): void {
+  const latestPath = path.join(tracegraphDir, 'latest.json');
+  try {
+    let existing: LatestPointer = {
+      latestRunId:    '',
+      latestTraceIds: [],
+      latestReportId: null,
+      updatedAt:      Date.now(),
+    };
+    if (fs.existsSync(latestPath)) {
+      existing = JSON.parse(fs.readFileSync(latestPath, 'utf8')) as LatestPointer;
+    }
+    existing.latestReportId = reportId;
+    existing.updatedAt      = Date.now();
+    fs.writeFileSync(latestPath, JSON.stringify(existing, null, 2) + '\n', 'utf8');
+  } catch {
+    // Non-fatal
+  }
+}
+
 function resolveCandidateFiles(
   candidateArg: string | undefined,
   tracegraphDir: string,
   cwd: string,
+  useLatest?: boolean,
 ): string[] {
   if (candidateArg) {
     const abs = path.resolve(cwd, candidateArg);
@@ -203,8 +231,29 @@ function resolveCandidateFiles(
     return [abs];
   }
 
-  // Default: all traces in .tracegraph/traces/
   const tracesDir = path.join(tracegraphDir, 'traces');
+
+  // --latest or no explicit candidate: prefer latest.json's trace IDs
+  if (useLatest || !candidateArg) {
+    const latestPath = path.join(tracegraphDir, 'latest.json');
+    if (fs.existsSync(latestPath)) {
+      try {
+        const ptr = JSON.parse(fs.readFileSync(latestPath, 'utf8')) as LatestPointer;
+        const resolved = ptr.latestTraceIds
+          .map((id) => path.join(tracesDir, `${id}.trace.json`))
+          .filter((p) => fs.existsSync(p));
+        if (resolved.length > 0) {
+          process.stderr.write(
+            `[tracegraph] Using latest run ${ptr.latestRunId} (${resolved.length} trace(s)).\n` +
+            `  Pass --candidate <dir> to compare a different set.\n`,
+          );
+          return resolved;
+        }
+      } catch { /* fall through to full scan */ }
+    }
+  }
+
+  // Fallback: all traces in .tracegraph/traces/
   if (!fs.existsSync(tracesDir)) return [];
   return fs.readdirSync(tracesDir)
     .filter((f) => f.endsWith('.trace.json'))
@@ -233,10 +282,35 @@ function loadApprovals(tracegraphDir: string) {
   }
 }
 
-function checkSuppressionsFileModified(_tracegraphDir: string): boolean {
-  // Full git-diff suppression detection is a T2.6 feature.
-  // For M2 we return false; git integration can be added later.
-  return false;
+/**
+ * Returns true when the suppressions file has uncommitted changes in git.
+ *
+ * Uses `git status --porcelain` on the suppressions file path. If git is not
+ * available, or the directory is not a git repository, returns false (safe
+ * default — does not block the workflow on non-git setups).
+ *
+ * Exit code 4 (POLICY_REVIEW) is emitted when this returns true, forcing
+ * human review before results are trusted.
+ */
+function checkSuppressionsFileModified(tracegraphDir: string): boolean {
+  const suppressionFile = path.join(
+    tracegraphDir, 'suppressions', 'tracegraph.suppressions.json',
+  );
+  if (!fs.existsSync(suppressionFile)) return false;
+
+  try {
+    const { spawnSync } = require('child_process') as typeof import('child_process');
+    const result = spawnSync(
+      'git',
+      ['status', '--porcelain', suppressionFile],
+      { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] },
+    );
+    // spawnSync returns error if git is not found; status !== 0 means not a repo
+    if (result.error || result.status !== 0) return false;
+    return (result.stdout ?? '').trim().length > 0;
+  } catch {
+    return false;
+  }
 }
 
 function resolveOutPath(

@@ -14,6 +14,7 @@
     "clean:artifacts": "pnpm -r --if-present clean"
   },
   "devDependencies": {
+    "@tracegraph/vitest": "workspace:*",
     "@types/node": "^20.12.0",
     "tsx": "^4.15.0",
     "typescript": "^5.4.5",

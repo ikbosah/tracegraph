@@ -116,7 +116,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0   # full history required for git subtree split
+          fetch-depth: 0              # full history required for git subtree split
+          persist-credentials: false  # don't install GITHUB_TOKEN credential helper;
+                                      # we authenticate via LARAVEL_DEPLOY_TOKEN in the push URL
 
       - name: Configure git
         run: |

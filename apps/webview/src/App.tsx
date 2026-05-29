@@ -6,17 +6,24 @@ import { GraphCanvas } from './GraphCanvas';
 import { DetailPanel } from './DetailPanel';
 import { CaptureLevelBanner } from './CaptureLevelBanner';
 import { FindingsPanel } from './FindingsPanel';
+import { TimelineView } from './TimelineView';
+import { ErrorPathView } from './ErrorPathView';
+
+type TraceViewMode = 'graph' | 'timeline' | 'error-path';
 
 interface AppProps {
-  trace:  TraceSession | null;
-  report: TraceReport  | null;
+  trace:          TraceSession | null;
+  report:         TraceReport  | null;
+  /** Called when a node / event wants to open a source file in the editor (VS Code only). */
+  onOpenSource?:  (file: string, line: number) => void;
 }
 
-export function App({ trace, report }: AppProps): React.ReactElement {
-  const [selectedNode, setSelectedNode]     = useState<GraphNode | null>(null);
-  const [bannerDismissed, setBannerDismissed] = useState(false);
+export function App({ trace, report, onOpenSource }: AppProps): React.ReactElement {
+  const [selectedNode, setSelectedNode]         = useState<GraphNode | null>(null);
+  const [bannerDismissed, setBannerDismissed]   = useState(false);
   const [highlightedTraces, setHighlightedTraces] = useState<string[]>([]);
-  const [showFindings, setShowFindings]     = useState(true);
+  const [showFindings, setShowFindings]         = useState(true);
+  const [traceViewMode, setTraceViewMode]       = useState<TraceViewMode>('graph');
 
   // ── Empty state ─────────────────────────────────────────────────────────────
   if (!trace && !report) {
@@ -87,22 +94,40 @@ export function App({ trace, report }: AppProps): React.ReactElement {
   const graph      = traceSessionToGraph(trace!);
   const showBanner = !bannerDismissed;
 
+  const entrypointLabel =
+    trace!.entrypoint.type === 'http_request'
+      ? `${trace!.entrypoint.method} ${trace!.entrypoint.path}`
+      : trace!.entrypoint.type === 'cli_command'
+        ? trace!.entrypoint.command
+        : trace!.entrypoint.type;
+
   return (
     <div className="layout">
       <header className="header">
         <span className="header-title">TraceGraph</span>
-        <span style={{ color: '#94a3b8', fontSize: 12 }}>
-          {trace!.entrypoint.type === 'http_request'
-            ? `${trace!.entrypoint.method} ${trace!.entrypoint.path}`
-            : trace!.entrypoint.type === 'cli_command'
-              ? trace!.entrypoint.command
-              : trace!.entrypoint.type}
-        </span>
+        <span style={{ color: '#94a3b8', fontSize: 12 }}>{entrypointLabel}</span>
         <span className="header-meta">
           {graph.nodes.length} nodes · {graph.edges.length} edges ·{' '}
           {trace!.status === 'passed' ? '✓' : trace!.status === 'failed' ? '✗' : '⚠'}{' '}
           {trace!.status}
         </span>
+
+        {/* View mode switcher */}
+        <div className="view-mode-tabs" role="tablist" aria-label="View mode">
+          {(['graph', 'timeline', 'error-path'] as TraceViewMode[]).map((mode) => (
+            <button
+              key={mode}
+              role="tab"
+              aria-selected={traceViewMode === mode}
+              className={`view-mode-tab${traceViewMode === mode ? ' view-mode-tab-active' : ''}`}
+              onClick={() => setTraceViewMode(mode)}
+            >
+              {mode === 'graph'       ? 'Graph'      :
+               mode === 'timeline'   ? 'Timeline'   :
+                                       'Error Path'}
+            </button>
+          ))}
+        </div>
       </header>
 
       {showBanner && (
@@ -112,18 +137,39 @@ export function App({ trace, report }: AppProps): React.ReactElement {
         />
       )}
 
-      <div className="main">
-        <div className="graph-area">
-          <GraphCanvas
-            graph={graph}
-            selectedNodeId={selectedNode?.id ?? null}
-            onNodeClick={setSelectedNode}
-          />
+      {/* ── Graph mode (default) ──────────────────────────────────────────── */}
+      {traceViewMode === 'graph' && (
+        <div className="main">
+          <div className="graph-area">
+            <GraphCanvas
+              graph={graph}
+              selectedNodeId={selectedNode?.id ?? null}
+              onNodeClick={setSelectedNode}
+            />
+          </div>
+          <div className="detail-panel">
+            <DetailPanel
+              node={selectedNode}
+              allEvents={trace!.events}
+              onOpenSource={onOpenSource}
+            />
+          </div>
         </div>
-        <div className="detail-panel">
-          <DetailPanel node={selectedNode} allEvents={trace!.events} />
+      )}
+
+      {/* ── Timeline mode ────────────────────────────────────────────────── */}
+      {traceViewMode === 'timeline' && (
+        <div className="main main-full">
+          <TimelineView trace={trace!} onOpenSource={onOpenSource} />
         </div>
-      </div>
+      )}
+
+      {/* ── Error path mode ──────────────────────────────────────────────── */}
+      {traceViewMode === 'error-path' && (
+        <div className="main main-full">
+          <ErrorPathView trace={trace!} onOpenSource={onOpenSource} />
+        </div>
+      )}
     </div>
   );
 }

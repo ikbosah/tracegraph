@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "module":     "commonjs",
+    "target":     "es2020",
+    "rootDir":    "src",
+    "outDir":     "out",
+    "lib":        ["es2020"],
+    "sourceMap":  true,
+    "paths": {
+      "@tracegraph/shared-types": ["../../packages/shared-types/src/index.ts"]
+    }
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist", "out"]
+}

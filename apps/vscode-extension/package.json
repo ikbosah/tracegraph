@@ -1,0 +1,170 @@
+{
+  "name": "tracegraph-vscode",
+  "displayName": "TraceGraph",
+  "description": "Runtime behaviour tracing, change coverage, and AI context packs for VS Code.",
+  "version": "0.0.1",
+  "publisher": "tracegraph",
+  "private": true,
+  "license": "UNLICENSED",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other",
+    "Debuggers",
+    "Testing"
+  ],
+  "icon": "media/icon.png",
+  "galleryBanner": {
+    "color": "#0f172a",
+    "theme": "dark"
+  },
+  "activationEvents": [
+    "workspaceContains:.tracegraph"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "tracegraph.runLatest",
+        "title": "Run with Tracing",
+        "category": "TraceGraph",
+        "icon": "$(play)"
+      },
+      {
+        "command": "tracegraph.compareLatest",
+        "title": "Compare Latest Run",
+        "category": "TraceGraph",
+        "icon": "$(diff)"
+      },
+      {
+        "command": "tracegraph.openTrace",
+        "title": "Open Trace",
+        "category": "TraceGraph",
+        "icon": "$(graph)"
+      },
+      {
+        "command": "tracegraph.viewReport",
+        "title": "View Latest Report",
+        "category": "TraceGraph",
+        "icon": "$(report)"
+      },
+      {
+        "command": "tracegraph.createBaseline",
+        "title": "Create Baseline",
+        "category": "TraceGraph",
+        "icon": "$(add)"
+      },
+      {
+        "command": "tracegraph.generatePack",
+        "title": "Generate AI Context Packs",
+        "category": "TraceGraph",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "tracegraph.refresh",
+        "title": "Refresh",
+        "category": "TraceGraph",
+        "icon": "$(refresh)"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "tracegraph-sidebar",
+          "title": "TraceGraph",
+          "icon": "media/tracegraph-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "tracegraph-sidebar": [
+        {
+          "id": "tracegraphTraces",
+          "name": "Traces",
+          "when": "workspaceFolderCount > 0"
+        },
+        {
+          "id": "tracegraphFindings",
+          "name": "Findings",
+          "when": "workspaceFolderCount > 0"
+        },
+        {
+          "id": "tracegraphBaselines",
+          "name": "Baselines",
+          "when": "workspaceFolderCount > 0"
+        },
+        {
+          "id": "tracegraphScenarios",
+          "name": "Scenarios",
+          "when": "workspaceFolderCount > 0"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "tracegraph.refresh",
+          "when": "view == tracegraphTraces || view == tracegraphFindings || view == tracegraphBaselines || view == tracegraphScenarios",
+          "group": "navigation"
+        },
+        {
+          "command": "tracegraph.runLatest",
+          "when": "view == tracegraphTraces",
+          "group": "navigation"
+        },
+        {
+          "command": "tracegraph.compareLatest",
+          "when": "view == tracegraphFindings",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "tracegraph.openTrace",
+          "when": "view == tracegraphTraces && viewItem == trace",
+          "group": "inline"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "TraceGraph",
+      "properties": {
+        "tracegraph.cliPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the tracegraph CLI executable. Leave empty to use the one from node_modules/.bin."
+        },
+        "tracegraph.runCommand": {
+          "type": "string",
+          "default": "",
+          "description": "Command to run with tracing (e.g. 'npx vitest run'). Used by 'Run with Tracing'."
+        },
+        "tracegraph.autoRefresh": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically refresh the sidebar when new traces are detected."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build":     "webpack --mode production",
+    "build:dev": "webpack --mode development",
+    "watch":     "webpack --mode development --watch",
+    "typecheck": "tsc --noEmit",
+    "package":   "vsce package"
+  },
+  "dependencies": {
+    "@tracegraph/shared-types": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node":   "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce":  "^2.24.0",
+    "ts-loader":     "^9.5.1",
+    "typescript":    "^5.4.5",
+    "webpack":       "^5.91.0",
+    "webpack-cli":   "^5.1.4"
+  }
+}

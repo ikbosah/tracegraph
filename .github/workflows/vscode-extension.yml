@@ -1,0 +1,66 @@
+name: VS Code Extension
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/vscode-extension/**'
+      - 'apps/webview/**'
+      - 'packages/shared-types/**'
+      - '.github/workflows/vscode-extension.yml'
+  pull_request:
+    paths:
+      - 'apps/vscode-extension/**'
+      - 'apps/webview/**'
+      - 'packages/shared-types/**'
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build & package extension
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: '9'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build shared-types
+        run: pnpm --filter @tracegraph/shared-types build
+
+      - name: Build webview
+        run: pnpm --filter @tracegraph/webview build
+        # Output: apps/webview/dist/
+
+      - name: Copy webview assets into extension media/
+        run: |
+          mkdir -p apps/vscode-extension/media
+          cp apps/webview/dist/tracegraph-viewer.iife.js apps/vscode-extension/media/
+          cp apps/webview/dist/tracegraph-viewer.css     apps/vscode-extension/media/
+
+      - name: Typecheck extension
+        run: pnpm --filter tracegraph-vscode typecheck
+
+      - name: Build extension
+        run: pnpm --filter tracegraph-vscode build
+
+      - name: Package VSIX
+        run: pnpm --filter tracegraph-vscode package
+        # Produces: apps/vscode-extension/tracegraph-0.0.1.vsix
+
+      - name: Upload VSIX artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tracegraph-vscode-${{ github.sha }}
+          path: apps/vscode-extension/*.vsix
+          retention-days: 14

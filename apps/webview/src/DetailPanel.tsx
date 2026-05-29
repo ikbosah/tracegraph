@@ -3,8 +3,10 @@ import type { GraphNode } from '@tracegraph/graph-engine';
 import type { TraceEvent } from '@tracegraph/shared-types';
 
 interface DetailPanelProps {
-  node:       GraphNode   | null;
-  allEvents?: TraceEvent[];
+  node:          GraphNode   | null;
+  allEvents?:    TraceEvent[];
+  /** VS Code source navigation callback — absent when running standalone. */
+  onOpenSource?: (file: string, line: number) => void;
 }
 
 const TYPE_COLORS: Record<string, string> = {
@@ -115,7 +117,7 @@ function XdebugCallStack({ xdebugEvents }: XdebugStackProps): React.ReactElement
 
 // ─── Main panel ───────────────────────────────────────────────────────────────
 
-export function DetailPanel({ node, allEvents }: DetailPanelProps): React.ReactElement {
+export function DetailPanel({ node, allEvents, onOpenSource }: DetailPanelProps): React.ReactElement {
   if (!node) {
     return (
       <div className="detail-empty">
@@ -169,9 +171,21 @@ export function DetailPanel({ node, allEvents }: DetailPanelProps): React.ReactE
           <KVRow
             k="Location"
             v={
-              <code style={{ fontSize: 10 }}>
-                {event.file}{event.line != null ? `:${event.line}` : ''}
-              </code>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                <code style={{ fontSize: 10 }}>
+                  {event.file}{event.line != null ? `:${event.line}` : ''}
+                </code>
+                {event.line != null && onOpenSource && (
+                  <button
+                    className="open-source-btn"
+                    onClick={() => onOpenSource(event.file!, event.line!)}
+                    title={`Open ${event.file}:${event.line} in editor`}
+                    aria-label="Open in editor"
+                  >
+                    ↗
+                  </button>
+                )}
+              </span>
             }
           />
         )}

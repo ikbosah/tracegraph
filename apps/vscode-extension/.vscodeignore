@@ -1,0 +1,22 @@
+# Files excluded from the packaged VSIX
+
+# Source
+src/
+out/
+**/*.ts
+**/*.ts.map
+!dist/extension.js
+!dist/extension.js.map
+
+# Build tooling
+webpack.config.js
+tsconfig.json
+node_modules/
+.nyc_output/
+coverage/
+
+# Dev files
+.gitignore
+.eslintrc*
+*.log
+*.tmp

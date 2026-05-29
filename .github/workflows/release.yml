@@ -165,7 +165,12 @@ jobs:
         env:
           PACKAGIST_TOKEN: ${{ secrets.PACKAGIST_TOKEN }}
         run: |
-          curl -sf -XPOST \
+          RESPONSE=$(curl -s -o /tmp/packagist_response.txt -w "%{http_code}" -XPOST \
             -H 'Content-Type: application/json' \
-            "https://packagist.org/api/update-package?username=tracegraph&apiToken=${PACKAGIST_TOKEN}" \
-            -d '{"repository":{"url":"https://github.com/ikbosah/tracegraph-laravel"}}'
+            "https://packagist.org/api/update-package?username=ikbosah&apiToken=${PACKAGIST_TOKEN}" \
+            -d '{"repository":{"url":"https://github.com/ikbosah/tracegraph-laravel"}}')
+          echo "Packagist HTTP status: ${RESPONSE}"
+          cat /tmp/packagist_response.txt
+          if [ "${RESPONSE}" -lt 200 ] || [ "${RESPONSE}" -ge 300 ]; then
+            exit 1
+          fi

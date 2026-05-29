@@ -1,6 +1,6 @@
 {
   "name": "@tracegraph/trace-core",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Trace writer, atomic finaliser, reader, storage manager, and ID generation",
   "main": "dist/index.js",
   "module": "dist/index.mjs",

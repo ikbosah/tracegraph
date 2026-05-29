@@ -1,6 +1,6 @@
 {
   "name": "@tracegraph/ai-coverage",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "AI Change Coverage and Prompt Pack Builder for TraceGraph",
   "main": "dist/index.js",
   "module": "dist/index.mjs",

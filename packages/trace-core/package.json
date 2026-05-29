@@ -1,23 +1,25 @@
 {
   "name": "@tracegraph/trace-core",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Trace writer, atomic finaliser, reader, storage manager, and ID generation",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
   "types": "dist/index.d.ts",
   "exports": {
     ".": {
-      "types":   "./dist/index.d.ts",
-      "import":  "./dist/index.mjs",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
       "require": "./dist/index.js"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "publishConfig": {
     "access": "public"
   },
   "scripts": {
-    "build":     "tsup src/index.ts --format cjs,esm --dts --external '@tracegraph/*'",
+    "build": "tsup src/index.ts --format cjs,esm --dts --external '@tracegraph/*'",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

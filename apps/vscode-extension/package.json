@@ -2,11 +2,17 @@
   "name": "tracegraph-vscode",
   "displayName": "TraceGraph",
   "description": "Runtime behaviour tracing, change coverage, and AI context packs for VS Code.",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "publisher": "tracegraph",
   "private": true,
   "license": "Apache License",
-  "keywords": ["tracing", "runtime", "coverage", "testing", "debugging"],
+  "keywords": [
+    "tracing",
+    "runtime",
+    "coverage",
+    "testing",
+    "debugging"
+  ],
   "repository": {
     "type": "git",
     "url": "https://github.com/ikbosah/tracegraph/"
@@ -154,21 +160,21 @@
     }
   },
   "scripts": {
-    "build":     "webpack --mode production",
+    "build": "webpack --mode production",
     "build:dev": "webpack --mode development",
-    "watch":     "webpack --mode development --watch",
+    "watch": "webpack --mode development --watch",
     "typecheck": "tsc --noEmit",
-    "package":   "vsce package --no-dependencies"
+    "package": "vsce package --no-dependencies"
   },
   "dependencies": {},
   "devDependencies": {
     "@tracegraph/shared-types": "workspace:*",
-    "@types/node":   "^20.11.0",
+    "@types/node": "^20.11.0",
     "@types/vscode": "^1.85.0",
-    "@vscode/vsce":  "^2.24.0",
-    "ts-loader":     "^9.5.1",
-    "typescript":    "^5.4.5",
-    "webpack":       "^5.91.0",
-    "webpack-cli":   "^5.1.4"
+    "@vscode/vsce": "^2.24.0",
+    "ts-loader": "^9.5.1",
+    "typescript": "^5.4.5",
+    "webpack": "^5.91.0",
+    "webpack-cli": "^5.1.4"
   }
 }

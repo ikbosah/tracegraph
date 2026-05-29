@@ -1,40 +1,44 @@
 {
   "name": "@tracegraph/vitest",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "TraceGraph reporter for Vitest — captures test structure and results as structured traces",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
   "types": "dist/index.d.ts",
   "exports": {
     ".": {
-      "types":   "./dist/index.d.ts",
-      "import":  "./dist/index.mjs",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
       "require": "./dist/index.js"
     },
     "./reporter": {
-      "types":   "./dist/reporter.d.ts",
-      "import":  "./dist/reporter.mjs",
+      "types": "./dist/reporter.d.ts",
+      "import": "./dist/reporter.mjs",
       "require": "./dist/reporter.js"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "publishConfig": {
     "access": "public"
   },
   "scripts": {
-    "build":     "tsup src/index.ts src/reporter.ts --format cjs,esm --dts --external vitest --external '@tracegraph/*'",
+    "build": "tsup src/index.ts src/reporter.ts --format cjs,esm --dts --external vitest --external '@tracegraph/*'",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@tracegraph/shared-types": "workspace:*",
-    "@tracegraph/trace-core":   "workspace:*"
+    "@tracegraph/trace-core": "workspace:*"
   },
   "peerDependencies": {
     "@tracegraph/trace-js": "workspace:*",
-    "vitest":               ">=1.0.0"
+    "vitest": ">=1.0.0"
   },
   "peerDependenciesMeta": {
-    "@tracegraph/trace-js": { "optional": true }
+    "@tracegraph/trace-js": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "vitest": "^1.6.0"

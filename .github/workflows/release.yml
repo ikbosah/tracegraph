@@ -135,6 +135,9 @@ jobs:
         env:
           LARAVEL_DEPLOY_TOKEN: ${{ secrets.LARAVEL_DEPLOY_TOKEN }}
         run: |
+          # Remove any credential helper the runner installed so our PAT in the
+          # URL is used as-is and not overridden by the GITHUB_TOKEN helper.
+          git config --global --unset-all credential.helper || true
           git push --force \
             "https://x-access-token:${LARAVEL_DEPLOY_TOKEN}@github.com/ikbosah/tracegraph-laravel.git" \
             laravel-split:main

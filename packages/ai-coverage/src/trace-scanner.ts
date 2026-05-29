@@ -96,8 +96,7 @@ export function eventMatchesFunction(
 
     // Direct class + method fields
     const classOk  = event.className === changed.className;
-    const methodOk = event.methodName === changed.methodName ||
-                     nameMatches(event.functionName, changed.methodName) ||
+    const methodOk = nameMatches(event.functionName, changed.methodName) ||
                      nameMatches(event.name, changed.methodName);
 
     if (classOk && methodOk) return true;

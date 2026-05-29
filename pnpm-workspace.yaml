@@ -4,4 +4,6 @@ packages:
   - 'sample-projects/*'
   - 'integrations/*'
 allowBuilds:
+  '@vscode/vsce-sign': set this to true or false
   esbuild: false
+  keytar: set this to true or false

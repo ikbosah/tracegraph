@@ -1,12 +1,15 @@
 {
-  "name": "tracegraph",
+  "name": "@tracegraph/cli",
   "version": "0.1.0",
   "description": "CLI-first runtime assurance platform",
-  "main": "dist/index.cjs",
+  "main": "dist/index.js",
   "bin": {
     "tracegraph": "bin/tracegraph.js"
   },
   "files": ["dist", "bin"],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build":     "tsup src/index.ts --format cjs --outDir dist",
     "typecheck": "tsc --noEmit"

@@ -116,7 +116,7 @@ function semanticTargetMatches(
   if (target.routePathPattern && !titleAndDesc.includes(target.routePathPattern.toLowerCase())) {
     return false;
   }
-  if (target.role && target.role !== finding.category && !titleAndDesc.includes(target.role)) {
+  if (target.role && !titleAndDesc.includes(target.role)) {
     return false;
   }
 

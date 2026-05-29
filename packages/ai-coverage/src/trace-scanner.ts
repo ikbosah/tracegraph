@@ -9,6 +9,7 @@
  *  2. className + methodName match (event.className + event.methodName)
  *  3. "ClassName.methodName" in event.name or event.displayName
  *  4. functionName match alone (lower confidence, but included)
+ * 
  */
 
 import * as fs   from 'fs';

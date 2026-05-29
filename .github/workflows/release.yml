@@ -134,10 +134,15 @@ jobs:
       - name: Push to tracegraph-laravel repo
         env:
           LARAVEL_DEPLOY_TOKEN: ${{ secrets.LARAVEL_DEPLOY_TOKEN }}
+          GIT_TERMINAL_PROMPT: '0'
         run: |
-          # Remove any credential helper the runner installed so our PAT in the
-          # URL is used as-is and not overridden by the GITHUB_TOKEN helper.
-          git config --global --unset-all credential.helper || true
+          # Setting credential.helper to '' (empty string) in global config acts as
+          # a cascade-reset sentinel: it discards all helpers inherited from
+          # system-level /etc/gitconfig, which is where the runner wires up the
+          # GITHUB_TOKEN helper.  --unset-all --global only removes global entries
+          # and leaves the system-level helper active — that's why the previous fix
+          # still authenticated as github-actions[bot].
+          git config --global credential.helper ''
           git push --force \
             "https://x-access-token:${LARAVEL_DEPLOY_TOKEN}@github.com/ikbosah/tracegraph-laravel.git" \
             laravel-split:main
@@ -145,11 +150,13 @@ jobs:
       - name: Tag the laravel repo with the release version
         env:
           LARAVEL_DEPLOY_TOKEN: ${{ secrets.LARAVEL_DEPLOY_TOKEN }}
+          GIT_TERMINAL_PROMPT: '0'
         run: |
           TAG="${{ github.ref_name }}"
           # Resolve the SHA of the split branch — this is the commit that lives
           # in the laravel repo, NOT the monorepo tag SHA.
           LARAVEL_SHA=$(git rev-parse laravel-split)
+          git config --global credential.helper ''
           git push \
             "https://x-access-token:${LARAVEL_DEPLOY_TOKEN}@github.com/ikbosah/tracegraph-laravel.git" \
             "${LARAVEL_SHA}:refs/tags/${TAG}"

@@ -10,6 +10,7 @@
  *   JR6: test_run event includes error when test fails
  *   JR7: onRunComplete writes capture-level.json and jest-summary.json
  */
+import { test, expect } from 'vitest';
 import fs   from 'fs';
 import os   from 'os';
 import path from 'path';

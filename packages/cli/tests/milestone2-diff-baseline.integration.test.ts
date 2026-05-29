@@ -419,8 +419,8 @@ describe('Milestone 2 — Behaviour Diff and Baseline', () => {
     expect(md).not.toContain('Do not merge');                // only appears for critical
   });
 
-  // ── T2.8: exit code 1 on critical finding ─────────────────────────────────
-  it('T2.8: compare --fail-on-critical exits 1 when an auth_check event is removed', () => {
+  // ── T2.8: exit code 3 (FINDINGS_THRESHOLD) on critical finding ───────────
+  it('T2.8: compare --fail-on-critical exits 3 when an auth_check event is removed', () => {
     // Baseline: has an auth_check event (critical → authorization role)
     const baselineSession = makeSession('base', [
       { name: 'RolePolicy.update', type: 'auth_check' },
@@ -438,9 +438,9 @@ describe('Milestone 2 — Behaviour Diff and Baseline', () => {
 
     expect(
       compareResult.status,
-      `Expected exit 1 for critical finding, got ${compareResult.status ?? 'null'}\n` +
+      `Expected exit 3 (FINDINGS_THRESHOLD) for critical finding, got ${compareResult.status ?? 'null'}\n` +
       `stdout: ${compareResult.stdout}\nstderr: ${compareResult.stderr}`,
-    ).toBe(1);
+    ).toBe(3);
 
     const report = readLatestReport(tmpDir);
     expect(report.summary.hasOpenCritical).toBe(true);

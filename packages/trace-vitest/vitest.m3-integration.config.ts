@@ -9,12 +9,7 @@
  * No `include` restriction — the test file is passed as a positional CLI arg.
  */
 import { defineConfig } from 'vitest/config';
-import { createRequire } from 'module';
-
-// Use createRequire so this works in both ESM and CJS vitest config contexts.
-// Plain require() is not available when vitest loads .ts configs as ESM.
-const _require = createRequire(import.meta.url);
-const { TraceGraphReporter } = _require('./dist/index.cjs') as typeof import('./src/index');
+import { TraceGraphReporter } from './src/index';
 
 export default defineConfig({
   test: {

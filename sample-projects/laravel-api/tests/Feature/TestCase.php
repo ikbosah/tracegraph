@@ -5,8 +5,6 @@ declare(strict_types=1);
 namespace Tests\Feature;
 
 use App\Models\Product;
-use App\Services\ProductService;
-use Illuminate\Database\Eloquent\Factories\Factory;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Orchestra\Testbench\TestCase as OrchestraTestCase;
 use Tracegraph\Laravel\Context;
@@ -78,12 +76,6 @@ abstract class TestCase extends OrchestraTestCase
     protected function defineRoutes($router): void
     {
         require __DIR__ . '/../../routes/api.php';
-    }
-
-    protected function resolveApplicationBindings($app): void
-    {
-        parent::resolveApplicationBindings($app);
-        $app->bind(ProductService::class, ProductService::class);
     }
 
     /**

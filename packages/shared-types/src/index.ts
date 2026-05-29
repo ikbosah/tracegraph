@@ -98,7 +98,7 @@ export type ConcurrencyType =
   | 'background';
 
 export type LanguageId = 'typescript' | 'javascript' | 'php';
-export type FrameworkId = 'express' | 'nestjs' | 'nextjs' | 'fastify' | 'laravel' | 'symfony' | 'vitest' | 'jest' | 'plain';
+export type FrameworkId = 'express' | 'nestjs' | 'nextjs' | 'fastify' | 'laravel' | 'symfony' | 'vitest' | 'jest' | 'xdebug' | 'plain';
 
 /** Cross-trace event reference for causal links (e.g. HTTP request → dispatched job). */
 export type EventRef = { traceId: string; eventId: string };

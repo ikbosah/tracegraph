@@ -2,19 +2,19 @@
   "name": "@tracegraph/vitest",
   "version": "0.1.0",
   "description": "TraceGraph reporter for Vitest — captures test structure and results as structured traces",
-  "main": "dist/index.cjs",
-  "module": "dist/index.js",
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
   "types": "dist/index.d.ts",
   "exports": {
     ".": {
       "types":   "./dist/index.d.ts",
-      "import":  "./dist/index.js",
-      "require": "./dist/index.cjs"
+      "import":  "./dist/index.mjs",
+      "require": "./dist/index.js"
     },
     "./reporter": {
-      "import":  "./dist/reporter.js",
-      "require": "./dist/reporter.cjs",
-      "types":   "./dist/reporter.d.ts"
+      "types":   "./dist/reporter.d.ts",
+      "import":  "./dist/reporter.mjs",
+      "require": "./dist/reporter.js"
     }
   },
   "files": ["dist"],

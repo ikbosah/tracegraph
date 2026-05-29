@@ -61,6 +61,16 @@ importers:
         specifier: ^5.2.0
         version: 5.4.21(@types/node@20.19.41)
 
+  packages/ai-coverage:
+    dependencies:
+      '@tracegraph/shared-types':
+        specifier: workspace:*
+        version: link:../shared-types
+    devDependencies:
+      vitest:
+        specifier: ^1.6.0
+        version: 1.6.1(@types/node@20.19.41)
+
   packages/ci-reporter:
     dependencies:
       '@tracegraph/shared-types':
@@ -69,6 +79,9 @@ importers:
 
   packages/cli:
     dependencies:
+      '@tracegraph/ai-coverage':
+        specifier: workspace:*
+        version: link:../ai-coverage
       '@tracegraph/ci-reporter':
         specifier: workspace:*
         version: link:../ci-reporter

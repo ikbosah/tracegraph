@@ -4,6 +4,7 @@
     "rootDir": "src",
     "outDir": "dist",
     "paths": {
+      "@tracegraph/ai-coverage":      ["../ai-coverage/src/index.ts"],
       "@tracegraph/shared-types":    ["../shared-types/src/index.ts"],
       "@tracegraph/trace-core":      ["../trace-core/src/index.ts"],
       "@tracegraph/trace-js":        ["../trace-js/src/index.ts"],

@@ -16,6 +16,7 @@ export const SCHEMA_VERSIONS = {
   findingApproval: 'tracegraph.finding-approvals.v1',
   scenario:        'tracegraph.scenario.v1',
   index:           'tracegraph.index.v1',
+  coverage:        'tracegraph.coverage.v1',
 } as const;
 
 export type SchemaVersions = typeof SCHEMA_VERSIONS;
@@ -582,6 +583,76 @@ export type ScenarioRunResult = {
   steps:       ScenarioStepResult[];
   passed:      boolean;
   durationMs:  number;
+};
+
+// ─── AI Change Coverage (M7A T7A.1) ──────────────────────────────────────────
+
+/**
+ * A function or method identified as changed by a git diff.
+ * Either `functionName` (standalone) or `className`+`methodName` (class method) is set.
+ */
+export type ChangedFunction = {
+  /** File path relative to workspace root (forward slashes). */
+  file:          string;
+  /** Standalone function name — mutually exclusive with className/methodName. */
+  functionName?: string;
+  /** Class that owns the method — set together with methodName. */
+  className?:    string;
+  /** Method name within the class — set together with className. */
+  methodName?:   string;
+  /** Line number within the new (post-diff) file where the declaration starts. */
+  startLine:     number;
+};
+
+/**
+ * A changed function that was matched by at least one runtime trace event.
+ */
+export type CoverageEntry = {
+  changed:    ChangedFunction;
+  coveredBy:  Array<{
+    traceId:   string;
+    eventId:   string;
+    traceFile: string;
+  }>;
+};
+
+/**
+ * Output of the AI change coverage analysis.
+ * Stored in `.tracegraph/reports/<id>.coverage.json`.
+ */
+export type ChangeCoverageReport = {
+  schemaVersion: 'tracegraph.coverage.v1';
+  reportId:      string;
+  createdAt:     number;
+  /** Git ref used as the diff base (e.g. "HEAD~1", "main"). */
+  baseRef:       string;
+  /** Git ref used as the diff head (e.g. "HEAD"). */
+  headRef:       string;
+  covered:       CoverageEntry[];
+  uncovered:     ChangedFunction[];
+  summary: {
+    changedFunctions:  number;
+    coveredCount:      number;
+    uncoveredCount:    number;
+    /** 0–100, integer. */
+    coveragePercent:   number;
+  };
+};
+
+// ─── Prompt Pack Builder (M7A T7A.3) ─────────────────────────────────────────
+
+/** AI tool format that the pack targets. */
+export type PromptPackFormat = 'cursor' | 'claude-code' | 'copilot' | 'mcp';
+
+/**
+ * A generated AI context pack for a specific tool format.
+ */
+export type PromptPack = {
+  format:   PromptPackFormat;
+  /** Rendered pack content (markdown, XML, or JSON). */
+  content:  string;
+  /** Conventional file name for the pack (e.g. ".cursor/tracegraph-context.md"). */
+  fileName: string;
 };
 
 // ─── CLI exit codes ───────────────────────────────────────────────────────────

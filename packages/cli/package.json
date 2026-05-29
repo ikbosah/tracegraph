@@ -12,6 +12,7 @@
     "build": "tsup src/index.ts --format cjs --outDir dist"
   },
   "dependencies": {
+    "@tracegraph/ai-coverage":       "workspace:*",
     "@tracegraph/ci-reporter":      "workspace:*",
     "@tracegraph/graph-engine":     "workspace:*",
     "@tracegraph/scenario-runner":  "workspace:*",

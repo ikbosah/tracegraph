@@ -41,6 +41,8 @@ import {
   scenarioValidateCommand,
   scenarioListCommand,
 } from './commands/scenario';
+import { coverageCommand }  from './commands/coverage';
+import { packCommand }      from './commands/pack';
 
 // ── Extract the wrapped command (everything after --) ─────────────────────
 const rawArgv     = process.argv.slice(2); // strip 'node' and script path
@@ -277,6 +279,50 @@ scenarioCmd
   .description('List scenario files in .tracegraph/scenarios/')
   .action(() => {
     process.exit(scenarioListCommand());
+  });
+
+// ── tracegraph coverage ───────────────────────────────────────────────────
+program
+  .command('coverage')
+  .description('Map changed functions (git diff) to runtime trace coverage')
+  .option('--base <ref>',        'Git ref to diff from (default: HEAD~1)')
+  .option('--head <ref>',        'Git ref to diff to (default: HEAD)')
+  .option('--traces <dir>',      'Directory containing .trace.json files')
+  .option('--out <file>',        'Write coverage report JSON to this file')
+  .option('--json',              'Also print the full report JSON to stdout')
+  .option('--fail-uncovered',    'Exit 1 if any changed functions have no trace coverage')
+  .action((options: {
+    base?:          string;
+    head?:          string;
+    traces?:        string;
+    out?:           string;
+    json?:          boolean;
+    failUncovered?: boolean;
+  }) => {
+    process.exit(coverageCommand(options));
+  });
+
+// ── tracegraph pack ───────────────────────────────────────────────────────
+program
+  .command('pack')
+  .description('Generate AI context packs (Cursor / Claude Code / Copilot / MCP) from findings')
+  .option('--format <fmt>',      'cursor | claude-code | copilot | mcp | all (default: all)')
+  .option('--report <file>',     'Path to a .report.json file (default: latest report)')
+  .option('--traces <dir>',      'Directory of .trace.json files to include as context')
+  .option('--out-dir <dir>',     'Output directory for pack files (default: project root)')
+  .option('--project <name>',    'Project name for pack headers')
+  .option('--max-chars <n>',     'Max trace context characters per pack', parseInt)
+  .option('--dry-run',           'Print what would be written without writing files')
+  .action((options: {
+    format?:   string;
+    report?:   string;
+    traces?:   string;
+    outDir?:   string;
+    project?:  string;
+    maxChars?: number;
+    dryRun?:   boolean;
+  }) => {
+    process.exit(packCommand(options));
   });
 
 // ── tracegraph clean ──────────────────────────────────────────────────────

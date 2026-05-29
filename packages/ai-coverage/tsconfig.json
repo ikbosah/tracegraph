@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "paths": {
+      "@tracegraph/shared-types":   ["../shared-types/src/index.ts"],
+      "@tracegraph/shared-types/*": ["../shared-types/src/*"]
+    }
+  },
+  "include": ["src/**/*"]
+}

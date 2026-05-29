@@ -32,13 +32,14 @@ import type {
 // ─── Rule IDs ─────────────────────────────────────────────────────────────────
 
 const RULES = {
-  AUTHORIZATION_REMOVED:   'behavior.authorization.removed',
-  VALIDATION_REMOVED:      'behavior.validation.removed',
-  BUSINESS_LOGIC_REMOVED:  'behavior.business_logic.removed',
-  AUTHORIZATION_ADDED:     'behavior.authorization.added',
-  RESOURCE_COUNT_CHANGED:  'behavior.resource_count.changed',
-  RESPONSE_FIELD_REMOVED:  'behavior.response_shape.field_removed',
-  RESPONSE_FIELD_ADDED:    'behavior.response_shape.field_added',
+  AUTHORIZATION_REMOVED:        'behavior.authorization.removed',
+  MIDDLEWARE_REMOVED:           'security.authorization.middleware_removed',
+  VALIDATION_REMOVED:           'behavior.validation.removed',
+  BUSINESS_LOGIC_REMOVED:       'behavior.business_logic.removed',
+  AUTHORIZATION_ADDED:          'behavior.authorization.added',
+  RESOURCE_COUNT_CHANGED:       'behavior.resource_count.changed',
+  RESPONSE_FIELD_REMOVED:       'behavior.response_shape.field_removed',
+  RESPONSE_FIELD_ADDED:         'behavior.response_shape.field_added',
 } as const;
 
 // ─── Public API ───────────────────────────────────────────────────────────────
@@ -214,6 +215,26 @@ function classifyRemovedSignature(removed: SignatureChange): {
   const label = sigLabel(removed);
 
   const eventLabel = removed.eventName ?? label;
+
+  // M5.2 — Route-level authorization middleware removed (more severe than a
+  // function-level auth check because it gates every request to that route).
+  if (
+    removed.role === 'authorization' &&
+    removed.signature.routePathPattern &&
+    !removed.critical
+  ) {
+    return {
+      ruleId:         RULES.MIDDLEWARE_REMOVED,
+      severity:       'critical',
+      category:       'security_authorization',
+      title:          `Authorization middleware removed: ${eventLabel}`,
+      description:    `A route-level authorization middleware "${eventLabel}" that guarded ` +
+                      `"${removed.signature.routeMethod ?? ''} ${removed.signature.routePathPattern}" ` +
+                      `in the baseline is absent in the candidate trace. Removing route middleware ` +
+                      `exposes every request to that route to unauthenticated or unauthorized access.`,
+      recommendation: 'Restore the middleware or confirm the route is now protected by an equivalent mechanism.',
+    };
+  }
 
   if (removed.critical || removed.role === 'authorization') {
     return {

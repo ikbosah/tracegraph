@@ -499,6 +499,91 @@ export type LatestPointer = {
   updatedAt:      number;
 };
 
+// ─── Scenario ─────────────────────────────────────────────────────────────────
+
+/**
+ * A TraceGraph scenario — a declarative definition of one or more servers to
+ * start plus an ordered sequence of HTTP steps to execute against them.
+ *
+ * Stored in `.tracegraph/scenarios/<name>.scenario.json`.
+ */
+export type ScenarioDefinition = {
+  schemaVersion: 'tracegraph.scenario.v1';
+  scenarioId:    string;
+  name:          string;
+  description?:  string;
+  servers?:      ScenarioServer[];
+  steps:         ScenarioStep[];
+  tags?:         string[];
+};
+
+/**
+ * A server that the scenario runner will start and manage.
+ * The process is spawned with `TRACEGRAPH_ENABLED=1` and related env vars so
+ * that the server's instrumentation can write trace files automatically.
+ */
+export type ScenarioServer = {
+  name:           string;
+  /** Shell command to start the server (e.g. "node dist/server.js"). */
+  command:        string;
+  port:           number;
+  env?:           Record<string, string>;
+  /** Maximum milliseconds to wait for the server to pass its health check. Default 30000. */
+  readyTimeoutMs?: number;
+  healthCheck?: {
+    /** URL path to poll (e.g. "/health"). Default "/health". */
+    path:            string;
+    method?:         string;
+    /** Expected HTTP status code. Default 200. */
+    expectedStatus?: number;
+    /** Poll interval in milliseconds. Default 500. */
+    intervalMs?:     number;
+    /** Maximum number of poll attempts before giving up. Default 60. */
+    maxAttempts?:    number;
+  };
+};
+
+/** One HTTP step in a scenario. */
+export type ScenarioStep = {
+  name:         string;
+  description?: string;
+  http: {
+    method:     string;
+    url:        string;
+    headers?:   Record<string, string>;
+    body?:      unknown;
+    /** Request timeout in milliseconds. Default 30000. */
+    timeoutMs?: number;
+  };
+  assert?: {
+    /** Expected HTTP status code. */
+    status?:        number;
+    /** String that must appear in the response body. */
+    bodyContains?:  string;
+  };
+  /** Milliseconds to pause after this step before continuing. */
+  delayMs?: number;
+};
+
+/** Result of a single scenario step execution. */
+export type ScenarioStepResult = {
+  name:        string;
+  status:      'passed' | 'failed' | 'skipped';
+  statusCode?: number;
+  durationMs:  number;
+  error?:      string;
+};
+
+/** Aggregate result of a full scenario run. */
+export type ScenarioRunResult = {
+  scenarioId:  string;
+  runId:       string;
+  bundleFile?: string;
+  steps:       ScenarioStepResult[];
+  passed:      boolean;
+  durationMs:  number;
+};
+
 // ─── CLI exit codes ───────────────────────────────────────────────────────────
 
 export const EXIT_CODES = {

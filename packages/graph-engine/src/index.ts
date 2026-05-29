@@ -11,3 +11,5 @@ export { diffBaseline } from './diff';
 export { diffToFindings, computeFingerprint } from './findings';
 
 export { evaluateFindings } from './evaluator';
+
+export { analyseTraceFindings, ANALYSE_RULES } from './analyse';

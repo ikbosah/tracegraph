@@ -155,4 +155,41 @@ describe('diffToFindings()', () => {
     });
     expect(fp1).toBe(fp2);
   });
+
+  // M5.2 — route-level authorization middleware
+  it('generates security.authorization.middleware_removed for route-level auth middleware', () => {
+    const diff: BehaviorDiff = {
+      ...makeEmptyDiff(),
+      removedSignatures: [makeSignatureChange({
+        signature: makeSig({
+          role:             'authorization',
+          eventType:        'auth_check',
+          routeMethod:      'POST',
+          routePathPattern: '/api/orders',
+        }),
+        role:      'authorization',
+        critical:  false,   // NOT flagged critical — route-middleware path
+        eventName: 'auth:api',
+      })],
+    };
+    const findings = diffToFindings(diff);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.ruleId).toBe('security.authorization.middleware_removed');
+    expect(findings[0]!.severity).toBe('critical');
+    expect(findings[0]!.title).toContain('auth:api');
+  });
+
+  it('still uses behavior.authorization.removed for non-route authorization events', () => {
+    const diff: BehaviorDiff = {
+      ...makeEmptyDiff(),
+      removedSignatures: [makeSignatureChange({
+        signature: makeSig({ role: 'authorization', functionName: 'checkPermission' }),
+        role:      'authorization',
+        critical:  false,
+        eventName: 'checkPermission',
+      })],
+    };
+    const findings = diffToFindings(diff);
+    expect(findings[0]!.ruleId).toBe('behavior.authorization.removed');
+  });
 });

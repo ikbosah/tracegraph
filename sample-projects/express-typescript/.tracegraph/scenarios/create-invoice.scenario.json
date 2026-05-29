@@ -1,0 +1,73 @@
+{
+  "schemaVersion": "tracegraph.scenario.v1",
+  "scenarioId": "create_invoice",
+  "name": "Create Invoice — end-to-end",
+  "description": "Starts the Express TypeScript server, creates an invoice, then verifies it appears in the list.",
+  "servers": [
+    {
+      "name": "express-api",
+      "command": "node -r ts-node/register src/app.ts",
+      "port": 3001,
+      "env": {
+        "PORT": "3001",
+        "NODE_ENV": "test"
+      },
+      "readyTimeoutMs": 15000,
+      "healthCheck": {
+        "path": "/health",
+        "method": "GET",
+        "expectedStatus": 200,
+        "intervalMs": 300,
+        "maxAttempts": 50
+      }
+    }
+  ],
+  "steps": [
+    {
+      "name": "Health check",
+      "description": "Verify the server is accepting requests before running the scenario",
+      "http": {
+        "method": "GET",
+        "url": "http://localhost:3001/health"
+      },
+      "assert": {
+        "status": 200,
+        "bodyContains": "ok"
+      }
+    },
+    {
+      "name": "Create invoice",
+      "description": "POST a new invoice and expect 201 Created",
+      "http": {
+        "method": "POST",
+        "url": "http://localhost:3001/invoices",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "customerId": "cust_001",
+          "items": [
+            { "description": "Consulting — 2h", "unitPrice": 150, "quantity": 2 },
+            { "description": "Expenses",         "unitPrice": 45,  "quantity": 1 }
+          ]
+        }
+      },
+      "assert": {
+        "status": 201
+      }
+    },
+    {
+      "name": "List invoices",
+      "description": "GET all invoices and confirm the new one appears",
+      "http": {
+        "method": "GET",
+        "url": "http://localhost:3001/invoices"
+      },
+      "assert": {
+        "status": 200,
+        "bodyContains": "cust_001"
+      }
+    }
+  ],
+  "tags": ["smoke", "invoices"]
+}

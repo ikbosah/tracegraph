@@ -6,7 +6,7 @@
  *   json                — passthrough of report JSON
  *   github-step-summary — markdown written to $GITHUB_STEP_SUMMARY
  */
-import type { TraceReport, EvaluatedFinding, FindingSeverity } from '@tracegraph/shared-types';
+import type { TraceReport, EvaluatedFinding, FindingSeverity, FindingCategory } from '@tracegraph/shared-types';
 
 export type ReportFormat = 'markdown' | 'json' | 'github-step-summary';
 
@@ -47,6 +47,28 @@ const SEVERITY_EMOJI: Record<FindingSeverity, string> = {
 
 const SEVERITY_ORDER: FindingSeverity[] = ['critical', 'high', 'medium', 'low', 'info'];
 
+// ─── Category group helpers ───────────────────────────────────────────────────
+
+function isSecurity(category: FindingCategory): boolean {
+  return category.startsWith('security_');
+}
+
+function isReliability(category: FindingCategory): boolean {
+  return (
+    category === 'performance' ||
+    category === 'data_integrity' ||
+    category === 'race_condition' ||
+    category === 'idempotency' ||
+    category === 'retry_storm'
+  );
+}
+
+function isPolicy(category: FindingCategory): boolean {
+  return category === 'tracegraph_policy_change';
+}
+
+// ─── Markdown renderer ────────────────────────────────────────────────────────
+
 function renderMarkdown(report: TraceReport, options: RenderOptions): string {
   const project = options.projectName ?? 'TraceGraph';
   const lines: string[] = [];
@@ -61,6 +83,11 @@ function renderMarkdown(report: TraceReport, options: RenderOptions): string {
 
   // ── Summary table ─────────────────────────────────────────────────────────
   const { summary } = report;
+  const openFindings = report.findings.filter((f) => f.status === 'open');
+
+  const securityCount    = openFindings.filter((f) => isSecurity(f.category)).length;
+  const reliabilityCount = openFindings.filter((f) => isReliability(f.category)).length;
+
   lines.push('### Summary');
   lines.push('');
   lines.push('| | |');
@@ -77,25 +104,68 @@ function renderMarkdown(report: TraceReport, options: RenderOptions): string {
     }
   }
 
+  if (securityCount > 0) {
+    lines.push(`| 🔐 Security findings | ${securityCount} |`);
+  }
+  if (reliabilityCount > 0) {
+    lines.push(`| ⚙️ Reliability findings | ${reliabilityCount} |`);
+  }
   if (summary.suppressionsModified) {
     lines.push(`| Suppressions file | ⚠️ Modified in this change |`);
   }
   lines.push('');
 
-  // ── Open findings by severity ─────────────────────────────────────────────
-  const openFindings = report.findings.filter((f) => f.status === 'open');
+  // ── Open findings ─────────────────────────────────────────────────────────
   if (openFindings.length > 0) {
-    lines.push('### Findings');
-    lines.push('');
-
-    for (const sev of SEVERITY_ORDER) {
-      const group = openFindings.filter((f) => f.severity === sev);
-      if (group.length === 0) continue;
-
-      lines.push(`#### ${SEVERITY_EMOJI[sev]} ${capitalise(sev)}`);
+    // Security section
+    const securityFindings = openFindings.filter((f) => isSecurity(f.category));
+    if (securityFindings.length > 0) {
+      lines.push('### 🔐 Security Findings');
       lines.push('');
-      for (const f of group) {
-        lines.push(renderFinding(f));
+      for (const sev of SEVERITY_ORDER) {
+        const group = securityFindings.filter((f) => f.severity === sev);
+        if (group.length === 0) continue;
+        lines.push(`#### ${SEVERITY_EMOJI[sev]} ${capitalise(sev)}`);
+        lines.push('');
+        for (const f of group) lines.push(renderFinding(f));
+      }
+    }
+
+    // Reliability section
+    const reliabilityFindings = openFindings.filter((f) => isReliability(f.category));
+    if (reliabilityFindings.length > 0) {
+      lines.push('### ⚙️ Reliability Findings');
+      lines.push('');
+      for (const sev of SEVERITY_ORDER) {
+        const group = reliabilityFindings.filter((f) => f.severity === sev);
+        if (group.length === 0) continue;
+        lines.push(`#### ${SEVERITY_EMOJI[sev]} ${capitalise(sev)}`);
+        lines.push('');
+        for (const f of group) lines.push(renderFinding(f));
+      }
+    }
+
+    // Policy section
+    const policyFindings = openFindings.filter((f) => isPolicy(f.category));
+    if (policyFindings.length > 0) {
+      lines.push('### 📋 Policy Findings');
+      lines.push('');
+      for (const f of policyFindings) lines.push(renderFinding(f));
+    }
+
+    // Remaining findings (behaviour changes, etc.)
+    const otherFindings = openFindings.filter(
+      (f) => !isSecurity(f.category) && !isReliability(f.category) && !isPolicy(f.category),
+    );
+    if (otherFindings.length > 0) {
+      lines.push('### Findings');
+      lines.push('');
+      for (const sev of SEVERITY_ORDER) {
+        const group = otherFindings.filter((f) => f.severity === sev);
+        if (group.length === 0) continue;
+        lines.push(`#### ${SEVERITY_EMOJI[sev]} ${capitalise(sev)}`);
+        lines.push('');
+        for (const f of group) lines.push(renderFinding(f));
       }
     }
   } else {

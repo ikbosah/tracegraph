@@ -10,8 +10,9 @@
       "@tracegraph/trace-js/*":      ["../trace-js/src/*"],
       "@tracegraph/trace-sanitizer": ["../trace-sanitizer/src/index.ts"],
       "@tracegraph/graph-engine":    ["../graph-engine/src/index.ts"],
-      "@tracegraph/ci-reporter":     ["../ci-reporter/src/index.ts"],
-      "@tracegraph/vitest":          ["../trace-vitest/src/index.ts"]
+      "@tracegraph/ci-reporter":      ["../ci-reporter/src/index.ts"],
+      "@tracegraph/scenario-runner":  ["../scenario-runner/src/index.ts"],
+      "@tracegraph/vitest":           ["../trace-vitest/src/index.ts"]
     }
   },
   "include": ["src/**/*", "tests/**/*", "bin/**/*"]

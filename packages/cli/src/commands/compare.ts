@@ -15,22 +15,29 @@ import path from 'path';
 import { createHash } from 'node:crypto';
 import { EXIT_CODES, SCHEMA_VERSIONS } from '@tracegraph/shared-types';
 import type {
+  TraceBundle,
   TraceSession,
   TraceReport,
   BehaviorDiff,
   EvaluatedFinding,
+  Finding,
   FindingSeverity,
   SuppressionsFile,
   FindingApprovalsFile,
   LatestPointer,
 } from '@tracegraph/shared-types';
-import { diffBaseline, diffToFindings, evaluateFindings } from '@tracegraph/graph-engine';
+import { diffBaseline, diffToFindings, evaluateFindings, analyseTraceFindings } from '@tracegraph/graph-engine';
 import { findBaselineForSession } from './baseline';
 import { emit } from '../protocol';
 
 export type CompareOptions = {
   baseline?:      string;
   candidate?:     string;
+  /**
+   * Path to a TraceBundle JSON file.  When supplied, all traces listed in the
+   * bundle are loaded and compared instead of using --candidate or latest.json.
+   */
+  bundle?:        string;
   out?:           string;
   failOnCritical?: boolean;
   /** Use traces from the most recent run recorded in .tracegraph/latest.json. */
@@ -45,7 +52,9 @@ export function compareCommand(options: CompareOptions): number {
     : path.join(tracegraphDir, 'baselines');
 
   // ── Resolve candidate trace files ────────────────────────────────────────
-  const candidateFiles = resolveCandidateFiles(options.candidate, tracegraphDir, cwd, options.latest);
+  const candidateFiles = options.bundle
+    ? resolveBundleTraceFiles(options.bundle, tracegraphDir, cwd)
+    : resolveCandidateFiles(options.candidate, tracegraphDir, cwd, options.latest);
   if (candidateFiles.length === 0) {
     process.stderr.write(
       '[tracegraph] No candidate traces found. ' +
@@ -96,8 +105,11 @@ export function compareCommand(options: CompareOptions): number {
     const diff = diffBaseline(baseline, session);
     diffs.push(diff);
 
-    // Generate findings
-    const rawFindings = diffToFindings(diff);
+    // Generate findings: diff-based (M2) + trace-level analysis (M5)
+    const rawFindings = [
+      ...diffToFindings(diff),
+      ...analyseTraceFindings(session),
+    ];
 
     // Evaluate (apply suppressions + approvals)
     const evaluated = evaluateFindings(rawFindings, session, suppressions, approvals);
@@ -118,8 +130,16 @@ export function compareCommand(options: CompareOptions): number {
     }
   }
 
-  // ── Suppression file change detection ────────────────────────────────────
+  // ── Suppression file change detection (M5.5) ─────────────────────────────
   const suppressionsModified = checkSuppressionsFileModified(tracegraphDir);
+
+  // Emit a structured policy finding when the suppressions file has uncommitted
+  // changes so that it appears in the report alongside other findings.
+  if (suppressionsModified) {
+    const policyFinding = buildSuppressionsModifiedFinding();
+    // Policy findings are always "open" — they cannot be suppressed away.
+    allEvaluated.push({ ...policyFinding, status: 'open' });
+  }
 
   // ── Build summary ─────────────────────────────────────────────────────────
   const findingsBySeverity: Record<FindingSeverity, number> = {
@@ -212,6 +232,59 @@ function updateLatestReport(tracegraphDir: string, reportId: string): void {
   } catch {
     // Non-fatal
   }
+}
+
+/**
+ * Resolve trace file paths from a TraceBundle JSON file.
+ *
+ * Bundle trace entries use paths relative to `.tracegraph/` (e.g. `traces/<id>.trace.json`).
+ * Entries whose files cannot be found on disk are skipped with a warning.
+ */
+function resolveBundleTraceFiles(
+  bundleArg: string,
+  tracegraphDir: string,
+  cwd: string,
+): string[] {
+  const abs = path.resolve(cwd, bundleArg);
+  if (!fs.existsSync(abs)) {
+    process.stderr.write(`[tracegraph] Bundle file not found: ${abs}\n`);
+    return [];
+  }
+
+  let bundle: TraceBundle;
+  try {
+    bundle = JSON.parse(fs.readFileSync(abs, 'utf8')) as TraceBundle;
+  } catch (err) {
+    process.stderr.write(`[tracegraph] Cannot parse bundle file: ${abs} — ${String(err)}\n`);
+    return [];
+  }
+
+  if (!Array.isArray(bundle.traces)) {
+    process.stderr.write(`[tracegraph] Bundle has no traces array: ${abs}\n`);
+    return [];
+  }
+
+  const resolved: string[] = [];
+  for (const entry of bundle.traces) {
+    // bundle.traces[].file is relative to .tracegraph/
+    const tracePath = path.join(tracegraphDir, entry.file);
+    if (fs.existsSync(tracePath)) {
+      resolved.push(tracePath);
+    } else {
+      process.stderr.write(
+        `[tracegraph] Bundle trace file not found, skipping: ${entry.file}\n`,
+      );
+    }
+  }
+
+  if (resolved.length > 0) {
+    process.stderr.write(
+      `[tracegraph] Bundle "${bundle.scenarioId}" — ` +
+      `${resolved.length}/${bundle.traces.length} trace(s) resolved.\n`,
+    );
+  }
+
+  return resolved;
 }
 
 function resolveCandidateFiles(
@@ -321,4 +394,35 @@ function resolveOutPath(
 ): string {
   if (outArg) return path.resolve(cwd, outArg);
   return path.join(tracegraphDir, 'reports', `${reportId}.report.json`);
+}
+
+/**
+ * M5.5 — Build a structured Finding for a modified suppressions file.
+ *
+ * Suppressions control which findings are silenced. Uncommitted changes to the
+ * suppressions file mean a reviewer has not yet signed off on the change,
+ * introducing a policy risk that must surface in the report.
+ */
+function buildSuppressionsModifiedFinding(): Finding {
+  const ruleId      = 'policy.suppressions_modified';
+  const fingerprint = createHash('sha256')
+    .update(`${ruleId}:tracegraph.suppressions.json`)
+    .digest('hex')
+    .slice(0, 16);
+
+  return {
+    id:          `find_${fingerprint}`,
+    fingerprint,
+    ruleId,
+    severity:    'high',
+    category:    'tracegraph_policy_change',
+    title:       'Suppressions file modified in this change',
+    description: 'The file .tracegraph/suppressions/tracegraph.suppressions.json has uncommitted ' +
+                 'changes. Modifications to the suppressions file alter which findings are silenced, ' +
+                 'which is a policy-level change that requires explicit human review.',
+    evidence:    [{ traceId: 'policy', eventIds: [] }],
+    recommendation:
+      'Commit and review the suppressions change separately, or revert it if unintentional. ' +
+      'Suppressions should be version-controlled and reviewed like code.',
+  };
 }

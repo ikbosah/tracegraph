@@ -28,6 +28,7 @@ import {
   findingApproveCommand,
   findingSuppressCommand,
 } from './commands/finding';
+import { findingExplainCommand } from './commands/explain';
 import { reportCommand }       from './commands/report';
 import { diagnoseCommand }     from './commands/diagnose';
 import { importXdebugCommand }  from './commands/import-xdebug';
@@ -35,6 +36,11 @@ import {
   schemaDoctorCommand,
   baselineMigrateCommand,
 } from './commands/schema';
+import {
+  scenarioRunCommand,
+  scenarioValidateCommand,
+  scenarioListCommand,
+} from './commands/scenario';
 
 // ── Extract the wrapped command (everything after --) ─────────────────────
 const rawArgv     = process.argv.slice(2); // strip 'node' and script path
@@ -111,10 +117,11 @@ program
   .description('Compare candidate traces against baselines and produce a report')
   .option('--baseline <dir>',     'Directory containing baseline files')
   .option('--candidate <file>',   'Candidate trace file or directory (default: latest run)')
+  .option('--bundle <file>',      'TraceBundle JSON file — compare all traces in the bundle')
   .option('--out <file>',         'Output path for the report JSON')
   .option('--latest',             'Compare only traces from the most recent run (reads .tracegraph/latest.json)')
   .option('--fail-on-critical',   'Exit 3 if any critical findings are open')
-  .action((options: { baseline?: string; candidate?: string; out?: string; latest?: boolean; failOnCritical?: boolean }) => {
+  .action((options: { baseline?: string; candidate?: string; bundle?: string; out?: string; latest?: boolean; failOnCritical?: boolean }) => {
     process.exit(compareCommand(options));
   });
 
@@ -155,6 +162,16 @@ findingCmd
     requiresEvidence?: string;
   }) => {
     process.exit(findingSuppressCommand(fingerprint, options));
+  });
+
+findingCmd
+  .command('explain')
+  .description('Show a detailed explanation of a finding by fingerprint')
+  .argument('<fingerprint>', 'Finding fingerprint (or unique prefix)')
+  .option('--report <file>', 'Path to a specific report JSON')
+  .option('--json', 'Output raw JSON instead of human-readable text')
+  .action((fingerprint: string, options: { report?: string; json?: boolean }) => {
+    process.exit(findingExplainCommand(fingerprint, options));
   });
 
 // ── tracegraph report ─────────────────────────────────────────────────────
@@ -234,6 +251,32 @@ importCmd
     outDir?:     string;
   }) => {
     process.exit(await importXdebugCommand(file, options));
+  });
+
+// ── tracegraph scenario ───────────────────────────────────────────────────
+const scenarioCmd = program.command('scenario').description('Run and manage TraceGraph scenarios');
+
+scenarioCmd
+  .command('run')
+  .description('Execute a scenario definition file end-to-end')
+  .argument('<file>', 'Path to the .scenario.json file')
+  .action(async (file: string) => {
+    process.exit(await scenarioRunCommand(file));
+  });
+
+scenarioCmd
+  .command('validate')
+  .description('Validate a scenario file structure without running it')
+  .argument('<file>', 'Path to the .scenario.json file')
+  .action((file: string) => {
+    process.exit(scenarioValidateCommand(file));
+  });
+
+scenarioCmd
+  .command('list')
+  .description('List scenario files in .tracegraph/scenarios/')
+  .action(() => {
+    process.exit(scenarioListCommand());
   });
 
 // ── tracegraph clean ──────────────────────────────────────────────────────

@@ -9,7 +9,7 @@
 const path = require('path');
 const fs   = require('fs');
 
-const distEntry = path.join(__dirname, '..', 'dist', 'index.cjs');
+const distEntry = path.join(__dirname, '..', 'dist', 'index.js');
 
 if (fs.existsSync(distEntry)) {
   require(distEntry);
@@ -19,7 +19,7 @@ if (fs.existsSync(distEntry)) {
     require('tsx/cjs');
   } catch {
     console.error(
-      'tracegraph: dist/index.cjs not found and tsx is not available.\n' +
+      'tracegraph: dist/index.js not found and tsx is not available.\n' +
       'Run `pnpm build` inside packages/cli, or install tsx globally.',
     );
     process.exit(1);

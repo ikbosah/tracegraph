@@ -91,18 +91,27 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${{ github.ref_name }}"
-          gh release create "$TAG" \
-            --title "TraceGraph $TAG" \
-            --generate-notes \
-            apps/vscode-extension/tracegraph-*.vsix
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            # Release already exists (e.g. re-run after partial failure) — just upload
+            gh release upload "$TAG" apps/vscode-extension/tracegraph-*.vsix --clobber
+          else
+            gh release create "$TAG" \
+              --title "TraceGraph $TAG" \
+              --generate-notes \
+              apps/vscode-extension/tracegraph-*.vsix
+          fi
+
+      - name: Publish to VS Code Marketplace
+        working-directory: apps/vscode-extension
+        run: pnpm exec vsce publish --no-dependencies
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
 
   # ── 3. Push the Laravel package subtree to its own repo for Packagist ─────────
   laravel-subtree:
     name: Sync Laravel package to Packagist
     runs-on: ubuntu-latest
     needs: npm-publish
-    # Skip if the secrets aren't configured yet
-    if: ${{ vars.LARAVEL_SUBTREE_ENABLED == 'true' }}
 
     steps:
       - uses: actions/checkout@v4
@@ -133,9 +142,12 @@ jobs:
           LARAVEL_DEPLOY_TOKEN: ${{ secrets.LARAVEL_DEPLOY_TOKEN }}
         run: |
           TAG="${{ github.ref_name }}"
+          # Resolve the SHA of the split branch — this is the commit that lives
+          # in the laravel repo, NOT the monorepo tag SHA.
+          LARAVEL_SHA=$(git rev-parse laravel-split)
           git push \
             "https://x-access-token:${LARAVEL_DEPLOY_TOKEN}@github.com/ikbosah/tracegraph-laravel.git" \
-            "refs/tags/${TAG}"
+            "${LARAVEL_SHA}:refs/tags/${TAG}"
 
       - name: Notify Packagist
         env:

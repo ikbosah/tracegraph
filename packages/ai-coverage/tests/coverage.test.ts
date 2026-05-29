@@ -48,8 +48,8 @@ describe('eventMatchesFunction() — function name matching', () => {
 });
 
 describe('eventMatchesFunction() — class method matching', () => {
-  it('matches when event.className and event.methodName align', () => {
-    const event   = makeEvent({ className: 'InvoiceService', methodName: 'create' });
+  it('matches when event.className and event.functionName align with changed method', () => {
+    const event   = makeEvent({ className: 'InvoiceService', functionName: 'create', type: 'method_call' });
     const changed: ChangedFunction = { file: 'src/service.ts', className: 'InvoiceService', methodName: 'create', startLine: 5 };
     expect(eventMatchesFunction(event, changed)).toBe(true);
   });
@@ -67,7 +67,7 @@ describe('eventMatchesFunction() — class method matching', () => {
   });
 
   it('does not match when method name differs', () => {
-    const event   = makeEvent({ className: 'InvoiceService', methodName: 'update' });
+    const event   = makeEvent({ className: 'InvoiceService', functionName: 'update', type: 'method_call' });
     const changed: ChangedFunction = { file: 'src/service.ts', className: 'InvoiceService', methodName: 'create', startLine: 5 };
     expect(eventMatchesFunction(event, changed)).toBe(false);
   });

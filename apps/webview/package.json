@@ -1,6 +1,6 @@
 {
   "name": "@tracegraph/webview",
-  "version": "0.0.2",
+  "version": "0.1.3",
   "private": true,
   "description": "Self-contained HTML trace viewer — React + custom SVG call graph",
   "type": "module",

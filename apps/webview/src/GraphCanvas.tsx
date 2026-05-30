@@ -95,6 +95,10 @@ function computeLayout(
 
 const NODE_R = 28; // circle radius
 
+/** Hard ceiling: if the graph still has more nodes after collapsing, refuse to
+ *  render the SVG and prompt the user to use Timeline view instead. */
+const MAX_RENDERABLE_NODES = 250;
+
 export function GraphCanvas({
   graph,
   selectedNodeId,
@@ -141,6 +145,17 @@ export function GraphCanvas({
     return (
       <div className="empty-state" style={{ height: '100%' }}>
         <p>No events to display</p>
+      </div>
+    );
+  }
+
+  if (graph.nodes.length > MAX_RENDERABLE_NODES) {
+    return (
+      <div className="empty-state" style={{ height: '100%' }}>
+        <p style={{ fontWeight: 600 }}>Graph too large to render</p>
+        <p style={{ fontSize: 13, color: '#94a3b8', marginTop: 8 }}>
+          {graph.nodes.length} nodes — switch to <strong>Timeline</strong> view for large traces.
+        </p>
       </div>
     );
   }
@@ -201,6 +216,7 @@ export function GraphCanvas({
           if (!pos) return null;
           const isSelected = node.id === selectedNodeId;
           const r = NODE_R + (node.size - 1) * 2;
+          const isCollapsed = (node.collapsedCount ?? 0) > 0;
 
           return (
             <g
@@ -215,11 +231,21 @@ export function GraphCanvas({
                 r={r}
                 fill={node.color}
                 fillOpacity={0.85}
-                stroke={isSelected ? '#fff' : 'rgba(255,255,255,0.15)'}
-                strokeWidth={isSelected ? 2.5 : 1}
+                stroke={isSelected ? '#fff' : isCollapsed ? 'rgba(255,255,255,0.5)' : 'rgba(255,255,255,0.15)'}
+                strokeWidth={isSelected ? 2.5 : isCollapsed ? 2 : 1}
+                strokeDasharray={isCollapsed ? '4 2' : undefined}
               />
+              {isCollapsed && (
+                <text
+                  textAnchor="middle"
+                  dominantBaseline="central"
+                  style={{ fontSize: Math.max(10, r * 0.55), fontWeight: 700, fill: '#fff', pointerEvents: 'none' }}
+                >
+                  ×{node.collapsedCount}
+                </text>
+              )}
               <text className="graph-node-label" y={r + 14}>
-                {truncate(node.label, 20)}
+                {truncate(node.label, 22)}
               </text>
             </g>
           );

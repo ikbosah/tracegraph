@@ -1,8 +1,13 @@
 /**
  * T8.6 — Findings sidebar provider
  *
- * Reads the latest `.report.json` (resolving the pointer from
- * `.tracegraph/latest.json`) and lists open findings grouped by severity.
+ * Reads the latest `.report.json` from each configured root (resolving the
+ * pointer from `.tracegraph/latest.json`) and lists open findings grouped by
+ * severity.
+ *
+ * Monorepo support:
+ *   Accepts an array of roots.  Open findings from every root's latest report
+ *   are merged and displayed together, grouped by severity.
  */
 
 import * as vscode from 'vscode';
@@ -47,7 +52,11 @@ export class FindingsProvider implements vscode.TreeDataProvider<FindingTreeItem
   readonly onDidChangeTreeData: vscode.Event<FindingTreeItem | undefined | void> =
     this._onDidChangeTreeData.event;
 
-  constructor(private readonly workspaceRoot: string) {}
+  constructor(private roots: string[]) {}
+
+  setRoots(roots: string[]): void {
+    this.roots = roots;
+  }
 
   refresh(): void {
     this._onDidChangeTreeData.fire();
@@ -62,11 +71,8 @@ export class FindingsProvider implements vscode.TreeDataProvider<FindingTreeItem
       return element.findings.map((f) => new FindingItem(f));
     }
 
-    // Root: load report and group by severity
-    const report = this._loadLatestReport();
-    if (!report) return [];
-
-    const open = report.findings.filter((f) => f.status === 'open');
+    // Root: collect open findings from every configured root, then group by severity
+    const open = this._loadAllOpenFindings();
     if (open.length === 0) return [];
 
     const ORDER = ['critical', 'high', 'medium', 'low', 'info'];
@@ -91,8 +97,19 @@ export class FindingsProvider implements vscode.TreeDataProvider<FindingTreeItem
 
   // ── Private ──────────────────────────────────────────────────────────────────
 
-  private _loadLatestReport(): TraceReport | null {
-    const tracegraphDir = path.join(this.workspaceRoot, '.tracegraph');
+  /** Aggregate open findings from the latest report of every root. */
+  private _loadAllOpenFindings(): EvaluatedFinding[] {
+    const all: EvaluatedFinding[] = [];
+    for (const root of this.roots) {
+      const report = this._loadLatestReportForRoot(root);
+      if (!report) continue;
+      all.push(...report.findings.filter((f) => f.status === 'open'));
+    }
+    return all;
+  }
+
+  private _loadLatestReportForRoot(workspaceRoot: string): TraceReport | null {
+    const tracegraphDir = path.join(workspaceRoot, '.tracegraph');
 
     // Try resolving via latest.json pointer first
     const latestPtr = path.join(tracegraphDir, 'latest.json');
@@ -102,7 +119,7 @@ export class FindingsProvider implements vscode.TreeDataProvider<FindingTreeItem
         if (ptr.reportFile && typeof ptr.reportFile === 'string') {
           const reportPath = path.isAbsolute(ptr.reportFile)
             ? ptr.reportFile
-            : path.join(this.workspaceRoot, ptr.reportFile);
+            : path.join(workspaceRoot, ptr.reportFile);
           if (fs.existsSync(reportPath)) {
             return JSON.parse(fs.readFileSync(reportPath, 'utf8')) as TraceReport;
           }
@@ -119,8 +136,8 @@ export class FindingsProvider implements vscode.TreeDataProvider<FindingTreeItem
         .readdirSync(reportsDir)
         .filter((f) => f.endsWith('.report.json'))
         .map((f) => ({
-          file:    path.join(reportsDir, f),
-          mtime:   fs.statSync(path.join(reportsDir, f)).mtimeMs,
+          file:  path.join(reportsDir, f),
+          mtime: fs.statSync(path.join(reportsDir, f)).mtimeMs,
         }))
         .sort((a, b) => b.mtime - a.mtime);
 

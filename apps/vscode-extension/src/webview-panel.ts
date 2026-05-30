@@ -14,6 +14,11 @@
  *   The webview posts `{ command: 'OPEN_SOURCE', file, line }` messages
  *   which are forwarded to `openSource()`.
  *
+ * Panel deduplication:
+ *   A static `_panels` map keyed by traceId / reportId ensures that
+ *   re-opening the same artifact reveals the existing panel rather than
+ *   spawning a duplicate.
+ *
  * Asset location:
  *   The built webview bundle is copied to `apps/vscode-extension/media/` as
  *   part of the build step.  Files:
@@ -34,9 +39,16 @@ type PanelData =
 export class TraceGraphPanel implements vscode.Disposable {
   private static readonly VIEW_TYPE = 'tracegraphViewer';
 
+  /**
+   * Open panels keyed by artifact ID (traceId or reportId).
+   * Prevents duplicate panels for the same trace/report.
+   */
+  private static readonly _panels = new Map<string, TraceGraphPanel>();
+
   private readonly _panel:         vscode.WebviewPanel;
   private readonly _extensionUri:  vscode.Uri;
   private readonly _workspaceRoot: string;
+  private readonly _cacheKey:      string;
   private readonly _disposables:   vscode.Disposable[] = [];
 
   // ── Factory ─────────────────────────────────────────────────────────────────
@@ -58,18 +70,27 @@ export class TraceGraphPanel implements vscode.Disposable {
       ? `Trace: ${key.slice(0, 8)}`
       : `Report: ${key.slice(0, 8)}`;
 
+    // Reveal existing panel if present
+    const existing = TraceGraphPanel._panels.get(key);
+    if (existing) {
+      existing.reveal();
+      return existing;
+    }
+
     const panel = vscode.window.createWebviewPanel(
       TraceGraphPanel.VIEW_TYPE,
       title,
       vscode.ViewColumn.Two,
       {
-        enableScripts:          true,
+        enableScripts:           true,
         retainContextWhenHidden: true,
-        localResourceRoots:     [vscode.Uri.joinPath(extensionUri, 'media')],
+        localResourceRoots:      [vscode.Uri.joinPath(extensionUri, 'media')],
       },
     );
 
-    return new TraceGraphPanel(panel, extensionUri, workspaceRoot, panelData);
+    const instance = new TraceGraphPanel(panel, extensionUri, workspaceRoot, panelData, key);
+    TraceGraphPanel._panels.set(key, instance);
+    return instance;
   }
 
   // ── Constructor ─────────────────────────────────────────────────────────────
@@ -79,10 +100,12 @@ export class TraceGraphPanel implements vscode.Disposable {
     extensionUri:  vscode.Uri,
     workspaceRoot: string,
     panelData:     PanelData,
+    cacheKey:      string,
   ) {
     this._panel         = panel;
     this._extensionUri  = extensionUri;
     this._workspaceRoot = workspaceRoot;
+    this._cacheKey      = cacheKey;
 
     this._panel.webview.html = this._buildHtml(panelData);
 
@@ -118,6 +141,8 @@ export class TraceGraphPanel implements vscode.Disposable {
   }
 
   dispose(): void {
+    // Remove from the deduplication cache before tearing down
+    TraceGraphPanel._panels.delete(this._cacheKey);
     for (const d of this._disposables) d.dispose();
     try { this._panel.dispose(); } catch { /* already disposed */ }
   }
@@ -125,7 +150,7 @@ export class TraceGraphPanel implements vscode.Disposable {
   // ── HTML builder ─────────────────────────────────────────────────────────────
 
   private _buildHtml(panelData: PanelData): string {
-    const webview = this._panel.webview;
+    const webview  = this._panel.webview;
     const mediaDir = vscode.Uri.joinPath(this._extensionUri, 'media');
 
     // Asset URIs (converted to webview-safe vscode-resource:// URIs)
@@ -136,7 +161,7 @@ export class TraceGraphPanel implements vscode.Disposable {
       vscode.Uri.joinPath(mediaDir, 'tracegraph-viewer.css'),
     );
 
-    const nonce   = generateNonce();
+    const nonce    = generateNonce();
     const dataJson = JSON.stringify(panelData.data);
 
     return `<!DOCTYPE html>

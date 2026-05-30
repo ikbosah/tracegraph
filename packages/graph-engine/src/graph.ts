@@ -45,6 +45,12 @@ export type GraphNode = {
   size:         number;
   /** The original TraceEvent that produced this node. */
   data:         TraceEvent;
+  /**
+   * Set when this node represents N collapsed siblings of the same type.
+   * The label will already include the count; this field allows renderers
+   * to display a badge or different visual treatment.
+   */
+  collapsedCount?: number;
 };
 
 export type GraphEdgeType = 'parent' | 'parallel_branch';
@@ -226,5 +232,105 @@ export function traceSessionToGraph(session: TraceSession): TraceGraph {
     }
   }
 
-  return { nodes, edges, captureLevel: session.captureLevel };
+  return collapseSiblings({ nodes, edges, captureLevel: session.captureLevel });
+}
+
+// ─── Sibling-collapse post-processing ────────────────────────────────────────
+
+/**
+ * When a parent node has more than SIBLING_COLLAPSE_THRESHOLD children of the
+ * same type, replace them all with a single summary node.
+ *
+ * This prevents runaway graph widths when a trace captures hundreds of
+ * repeated events (e.g. 1,225 db_query nodes from a full test-suite run).
+ * The summary node's label is "db query ×1225" and its collapsedCount is set
+ * so the renderer can style it differently.
+ */
+const SIBLING_COLLAPSE_THRESHOLD = 5;
+
+function collapseSiblings(graph: TraceGraph): TraceGraph {
+  const { nodes, edges, captureLevel } = graph;
+
+  if (nodes.length <= SIBLING_COLLAPSE_THRESHOLD * 2) {
+    return graph;
+  }
+
+  // ── Build: parentId → Map<type, nodeId[]> ─────────────────────────────────
+  const nodeById         = new Map<string, GraphNode>(nodes.map((n) => [n.id, n]));
+  const childrenByParent = new Map<string, Map<string, string[]>>();
+
+  for (const edge of edges) {
+    if (!childrenByParent.has(edge.source)) {
+      childrenByParent.set(edge.source, new Map());
+    }
+    const target = nodeById.get(edge.target);
+    if (!target) continue;
+    const typeMap = childrenByParent.get(edge.source)!;
+    if (!typeMap.has(target.type)) typeMap.set(target.type, []);
+    typeMap.get(target.type)!.push(edge.target);
+  }
+
+  // ── Pass 1: identify which nodes will be collapsed ────────────────────────
+  // We must know this BEFORE creating summary nodes so we can skip creating
+  // summary children for parents that are themselves being collapsed (which
+  // would produce orphaned summary nodes with no surviving parent).
+  const willCollapse = new Set<string>();
+  for (const typeMap of childrenByParent.values()) {
+    for (const nodeIds of typeMap.values()) {
+      if (nodeIds.length >= SIBLING_COLLAPSE_THRESHOLD) {
+        for (const id of nodeIds) willCollapse.add(id);
+      }
+    }
+  }
+
+  if (willCollapse.size === 0) return graph;
+
+  // ── Pass 2: create summary nodes only for non-collapsed parents ───────────
+  const summaryNodes: GraphNode[] = [];
+  const summaryEdges: GraphEdge[] = [];
+
+  for (const [parentId, typeMap] of childrenByParent) {
+    // Skip: if this parent is itself being collapsed its summary children would
+    // be orphaned (parent no longer exists in the output graph).
+    if (willCollapse.has(parentId)) continue;
+
+    for (const [type, nodeIds] of typeMap) {
+      if (nodeIds.length < SIBLING_COLLAPSE_THRESHOLD) continue;
+
+      const first    = nodeById.get(nodeIds[0]!)!;
+      const typeName = type.replace(/_/g, ' ');
+      const summaryId = `summary__${parentId}__${type}`;
+
+      summaryNodes.push({
+        id:             summaryId,
+        label:          `${typeName} ×${nodeIds.length}`,
+        type:           type as GraphNodeType,
+        language:       first.language,
+        framework:      first.framework,
+        color:          first.color,
+        size:           Math.min(10, Math.ceil(Math.log10(nodeIds.length + 1)) + 3),
+        collapsedCount: nodeIds.length,
+        data:           first.data,
+      });
+
+      summaryEdges.push({
+        id:     `${parentId}→${summaryId}`,
+        source: parentId,
+        target: summaryId,
+        type:   'parent',
+      });
+    }
+  }
+
+  return {
+    nodes: [
+      ...nodes.filter((n) => !willCollapse.has(n.id)),
+      ...summaryNodes,
+    ],
+    edges: [
+      ...edges.filter((e) => !willCollapse.has(e.source) && !willCollapse.has(e.target)),
+      ...summaryEdges,
+    ],
+    captureLevel,
+  };
 }

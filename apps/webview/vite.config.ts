@@ -4,6 +4,18 @@ import path from 'path';
 
 export default defineConfig({
   plugins: [react()],
+
+  /**
+   * Replace Node.js globals that leak into the IIFE bundle via React / other
+   * CJS-interop code paths.  Without these, `process is not defined` crashes
+   * the bundle at runtime when the HTML is opened in a browser.
+   */
+  define: {
+    'process.env.NODE_ENV': JSON.stringify('production'),
+    'process.env':          '{}',
+    global:                 'globalThis',
+  },
+
   resolve: {
     alias: {
       '@tracegraph/graph-engine': path.resolve(__dirname, '../../packages/graph-engine/src/graph.ts'),

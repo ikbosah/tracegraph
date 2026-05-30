@@ -31,6 +31,14 @@ const TYPE_COLORS: Record<string, string> = {
   test_file:           '#818cf8',
 };
 
+// ─── Constants ───────────────────────────────────────────────────────────────
+
+/**
+ * Maximum rows rendered in the timeline. For larger traces we show the longest
+ * events first (most interesting for perf/debug) and display a truncation notice.
+ */
+const MAX_TIMELINE_ROWS = 500;
+
 // ─── Component ────────────────────────────────────────────────────────────────
 
 interface TimelineViewProps {
@@ -46,13 +54,22 @@ function fmtDuration(ms: number | undefined): string {
 }
 
 export function TimelineView({ trace, onOpenSource }: TimelineViewProps): React.ReactElement {
-  const events = useMemo(
-    () =>
-      trace.events
-        .filter((e) => e.type !== 'trace_start' && e.type !== 'trace_end')
-        .sort((a, b) => a.startTime - b.startTime),
-    [trace],
-  );
+  const { events, truncated } = useMemo(() => {
+    const all = trace.events
+      .filter((e) => e.type !== 'trace_start' && e.type !== 'trace_end')
+      .sort((a, b) => a.startTime - b.startTime);
+
+    if (all.length <= MAX_TIMELINE_ROWS) {
+      return { events: all, truncated: 0 };
+    }
+
+    // For large traces show the longest-running events first (most actionable),
+    // then pad with the remaining events in time order up to the cap.
+    const byDuration = [...all].sort((a, b) => (b.durationMs ?? 0) - (a.durationMs ?? 0));
+    const topIds     = new Set(byDuration.slice(0, MAX_TIMELINE_ROWS).map((e) => e.eventId));
+    const visible    = all.filter((e) => topIds.has(e.eventId));
+    return { events: visible, truncated: all.length - visible.length };
+  }, [trace]);
 
   if (events.length === 0) {
     return <div className="timeline-empty">No events to display in this trace.</div>;
@@ -67,6 +84,15 @@ export function TimelineView({ trace, onOpenSource }: TimelineViewProps): React.
 
   return (
     <div className="timeline-container">
+      {truncated > 0 && (
+        <div className="timeline-truncation-notice">
+          Showing longest {MAX_TIMELINE_ROWS} of {MAX_TIMELINE_ROWS + truncated} events.{' '}
+          <span style={{ opacity: 0.7 }}>
+            Use <code>tracegraph report</code> for a full diff.
+          </span>
+        </div>
+      )}
+
       {/* Column headers */}
       <div className="timeline-header-row">
         <div className="timeline-col-label">Event</div>

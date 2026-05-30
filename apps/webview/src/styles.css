@@ -514,7 +514,9 @@ html, body, #root {
 /* full-width main area for timeline / error-path modes */
 .main-full {
   flex-direction: column;
-  overflow-y: auto;
+  /* Children handle their own internal scrolling — clipping at this level
+     avoids a competing outer scroll context that obscures content. */
+  overflow: hidden;
   padding: 0;
 }
 
@@ -553,7 +555,11 @@ html, body, #root {
   display: flex;
   flex-direction: column;
   width: 100%;
-  height: 100%;
+  /* flex: 1 + min-height: 0 is the correct flex-fill-and-scroll pattern.
+     height: 100% is unreliable in column flex containers (may resolve to 0
+     in some Chromium/webview contexts). */
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
 }
@@ -636,7 +642,55 @@ html, body, #root {
   font-family: 'SFMono-Regular', 'Consolas', monospace;
 }
 
+.timeline-truncation-notice {
+  padding: 6px 12px;
+  font-size: 11px;
+  color: var(--text-muted);
+  background: rgba(251,191,36,0.08);
+  border-bottom: 1px solid rgba(251,191,36,0.2);
+  flex-shrink: 0;
+}
+.timeline-truncation-notice code {
+  font-family: 'SFMono-Regular', 'Consolas', monospace;
+  font-size: 10px;
+  background: rgba(255,255,255,0.07);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
 /* ── Error path view ─────────────────────────────────────────────────────── */
+
+/* Summary bar at the top of the error path list */
+.error-path-summary {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 6px 4px 2px;
+  flex-shrink: 0;
+}
+.error-path-summary-count {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--red);
+  line-height: 1;
+}
+.error-path-summary-label {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+/* Repeat badge: "×3" shown when multiple identical chains are folded */
+.error-path-repeat-badge {
+  margin-left: auto;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: rgba(148,163,184,0.15);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
 .error-path-empty {
   display: flex;
   flex-direction: column;
@@ -660,7 +714,11 @@ html, body, #root {
   gap: 24px;
   padding: 16px;
   overflow-y: auto;
-  height: 100%;
+  /* flex: 1 + min-height: 0 is the canonical flex-fill-and-scroll pattern.
+     height: 100% in a column flex container can resolve to 0 in certain
+     Chromium/webview builds, causing all content to be clipped. */
+  flex: 1;
+  min-height: 0;
 }
 
 .error-path-block {
@@ -775,6 +833,22 @@ html, body, #root {
   color: var(--text);
   flex: 1;
   word-break: break-word;
+}
+.error-path-error-stack {
+  flex-basis: 100%;
+  margin-top: 6px;
+  font-family: 'SFMono-Regular', 'Consolas', monospace;
+  font-size: 10px;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 180px;
+  overflow-y: auto;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 6px 8px;
+  line-height: 1.5;
 }
 
 /* ── Xdebug call stack ───────────────────────────────────────────────────── */

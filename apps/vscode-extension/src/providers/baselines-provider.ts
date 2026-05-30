@@ -3,6 +3,9 @@
  *
  * Lists `.baseline.json` files in `.tracegraph/baselines/`.
  * Shows baseline ID (truncated), test name / entrypoint, and approval status.
+ *
+ * Monorepo support:
+ *   Accepts an array of roots and aggregates baselines from every root.
  */
 
 import * as vscode from 'vscode';
@@ -34,7 +37,11 @@ export class BaselinesProvider implements vscode.TreeDataProvider<BaselineItem> 
   readonly onDidChangeTreeData: vscode.Event<BaselineItem | undefined | void> =
     this._onDidChangeTreeData.event;
 
-  constructor(private readonly workspaceRoot: string) {}
+  constructor(private roots: string[]) {}
+
+  setRoots(roots: string[]): void {
+    this.roots = roots;
+  }
 
   refresh(): void {
     this._onDidChangeTreeData.fire();
@@ -45,27 +52,33 @@ export class BaselinesProvider implements vscode.TreeDataProvider<BaselineItem> 
   }
 
   getChildren(): vscode.ProviderResult<BaselineItem[]> {
-    const dir = path.join(this.workspaceRoot, '.tracegraph', 'baselines');
-    if (!fs.existsSync(dir)) return [];
+    const items: BaselineItem[] = [];
 
-    let files: string[];
-    try {
-      files = fs
-        .readdirSync(dir)
-        .filter((f) => f.endsWith('.baseline.json'))
-        .map((f) => path.join(dir, f));
-    } catch {
-      return [];
+    for (const root of this.roots) {
+      const dir = path.join(root, '.tracegraph', 'baselines');
+      if (!fs.existsSync(dir)) continue;
+
+      let files: string[];
+      try {
+        files = fs
+          .readdirSync(dir)
+          .filter((f) => f.endsWith('.baseline.json'))
+          .map((f) => path.join(dir, f));
+      } catch {
+        continue;
+      }
+
+      for (const f of files) {
+        const meta     = tryReadBaselineMeta(f);
+        const id       = meta?.baselineId ?? path.basename(f, '.baseline.json');
+        const label    = id.slice(0, 14);
+        const desc     = meta?.testId ?? meta?.entrypoint ?? '';
+        const approved = meta?.approved ?? false;
+        items.push(new BaselineItem(f, label, desc, approved));
+      }
     }
 
-    return files.map((f) => {
-      const meta     = tryReadBaselineMeta(f);
-      const id       = meta?.baselineId ?? path.basename(f, '.baseline.json');
-      const label    = id.slice(0, 14);
-      const desc     = meta?.testId ?? meta?.entrypoint ?? '';
-      const approved = meta?.approved ?? false;
-      return new BaselineItem(f, label, desc, approved);
-    });
+    return items;
   }
 }
 

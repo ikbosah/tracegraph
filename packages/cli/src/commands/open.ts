@@ -55,7 +55,10 @@ export function openCommand(traceFilePath: string, options: OpenOptions): void {
   const bundleCss = readCssIfExists(bundlePath);
 
   // ── Build HTML ────────────────────────────────────────────────────────────
-  const traceJson = JSON.stringify(trace);
+  // Escape </script> so the embedded JSON cannot break the outer HTML parser.
+  // JSON.stringify does not escape this sequence, but a script tag terminates
+  // at the first </script> regardless of type="application/json".
+  const traceJson = JSON.stringify(trace).replace(/<\/script>/gi, '<\\/script>');
   const title     = buildTitle(trace);
   const html      = buildHtml({ title, traceJson, bundleJs, bundleCss });
 

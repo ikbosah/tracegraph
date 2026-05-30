@@ -6,7 +6,13 @@
  * T8.3 — FileWatcher wiring
  *
  * Activation:
- *   workspaceContains:.tracegraph/**
+ *   workspaceContains:.tracegraph  (root-level)
+ *   workspaceContains:**/.tracegraph  (monorepo subfolders)
+ *
+ * Monorepo support:
+ *   findTracegraphRoots() scans each workspace folder and its immediate
+ *   children for a `.tracegraph/` directory.  All providers receive the
+ *   full list of roots so they aggregate data across every sub-project.
  *
  * Registers:
  *   - Commands: runLatest, compareLatest, openTrace, viewReport,
@@ -32,26 +38,44 @@ import { ScenariosProvider }  from './providers/scenarios-provider';
 // ─── Activate ─────────────────────────────────────────────────────────────────
 
 export function activate(context: vscode.ExtensionContext): void {
-  const workspaceRoot = getWorkspaceRoot();
-  if (!workspaceRoot) return; // no workspace open
-  // Capture as a typed const so closures see `string`, not `string | undefined`
-  const root: string = workspaceRoot;
+  // Find all project roots that contain a .tracegraph directory.
+  // Re-evaluated on workspace folder changes.
+  let roots = findTracegraphRoots();
+
+  if (roots.length === 0) {
+    // No .tracegraph found yet — still register everything so commands work
+    // once the user runs tracing for the first time.
+    roots = getWorkspaceFolderPaths();
+  }
 
   // ── Output channel ─────────────────────────────────────────────────────────
   const outputChannel = vscode.window.createOutputChannel('TraceGraph');
   context.subscriptions.push(outputChannel);
 
   // ── Sidebar providers ───────────────────────────────────────────────────────
-  const tracesProvider    = new TracesProvider(root);
-  const baselinesProvider = new BaselinesProvider(root);
-  const findingsProvider  = new FindingsProvider(root);
-  const scenariosProvider = new ScenariosProvider(root);
+  const tracesProvider    = new TracesProvider(roots);
+  const baselinesProvider = new BaselinesProvider(roots);
+  const findingsProvider  = new FindingsProvider(roots);
+  const scenariosProvider = new ScenariosProvider(roots);
 
   context.subscriptions.push(
     vscode.window.registerTreeDataProvider('tracegraphTraces',    tracesProvider),
     vscode.window.registerTreeDataProvider('tracegraphBaselines', baselinesProvider),
     vscode.window.registerTreeDataProvider('tracegraphFindings',  findingsProvider),
     vscode.window.registerTreeDataProvider('tracegraphScenarios', scenariosProvider),
+  );
+
+  // Re-scan roots if workspace folders change (monorepo: folder added/removed)
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeWorkspaceFolders(() => {
+      const newRoots = findTracegraphRoots();
+      const effective = newRoots.length > 0 ? newRoots : getWorkspaceFolderPaths();
+      tracesProvider.setRoots(effective);
+      baselinesProvider.setRoots(effective);
+      findingsProvider.setRoots(effective);
+      scenariosProvider.setRoots(effective);
+      refreshAll();
+    }),
   );
 
   // ── File watcher → auto-refresh ─────────────────────────────────────────────
@@ -61,6 +85,16 @@ export function activate(context: vscode.ExtensionContext): void {
   watcher.onArtifactChange((e) => {
     const cfg = vscode.workspace.getConfiguration('tracegraph');
     if (!cfg.get<boolean>('autoRefresh', true)) return;
+
+    // A new trace file was detected — rescan roots in case this is the first
+    // run in a previously-unseen subfolder.
+    const latestRoots = findTracegraphRoots();
+    if (latestRoots.length > 0) {
+      tracesProvider.setRoots(latestRoots);
+      baselinesProvider.setRoots(latestRoots);
+      findingsProvider.setRoots(latestRoots);
+      scenariosProvider.setRoots(latestRoots);
+    }
 
     switch (e.kind) {
       case 'trace':    tracesProvider.refresh();    break;
@@ -81,15 +115,22 @@ export function activate(context: vscode.ExtensionContext): void {
 
   let activeRunner: CliRunner | undefined;
 
+  /**
+   * Run a CLI command from `cwd`.  When multiple roots exist, the caller
+   * should pass the root relevant to the operation; otherwise defaults to the
+   * first root.
+   */
   async function runCli(
-    args:    string[],
-    label:   string,
+    args:  string[],
+    label: string,
+    cwd?:  string,
   ): Promise<number> {
+    const effectiveCwd = cwd ?? roots[0] ?? getWorkspaceFolderPaths()[0] ?? '';
     outputChannel.clear();
     outputChannel.show(true);
-    outputChannel.appendLine(`▶ tracegraph ${args.join(' ')}`);
+    outputChannel.appendLine(`▶ tracegraph ${args.join(' ')}  (cwd: ${effectiveCwd})`);
 
-    const runner = new CliRunner(root);
+    const runner = new CliRunner(effectiveCwd);
     activeRunner = runner;
 
     runner.onStderr((line) => outputChannel.append(line));
@@ -108,6 +149,14 @@ export function activate(context: vscode.ExtensionContext): void {
   // tracegraph.refresh
   context.subscriptions.push(
     vscode.commands.registerCommand('tracegraph.refresh', () => {
+      // Re-scan in case new .tracegraph dirs appeared since activation
+      const latest = findTracegraphRoots();
+      if (latest.length > 0) {
+        tracesProvider.setRoots(latest);
+        baselinesProvider.setRoots(latest);
+        findingsProvider.setRoots(latest);
+        scenariosProvider.setRoots(latest);
+      }
       refreshAll();
     }),
   );
@@ -127,14 +176,18 @@ export function activate(context: vscode.ExtensionContext): void {
         await cfg.update('runCommand', entered, vscode.ConfigurationTarget.Workspace);
       }
 
-      const cmd = cfg.get<string>('runCommand') ?? '';
+      const cmd  = cfg.get<string>('runCommand') ?? '';
       const args = ['run', '--', ...cmd.split(/\s+/).filter(Boolean)];
+
+      // If multiple roots exist, ask which project to run in.
+      const cwd = await pickRoot(roots, 'Select the project to run tracing in');
+      if (!cwd) return;
 
       await vscode.window.withProgress(
         { location: vscode.ProgressLocation.Notification, title: 'TraceGraph: running...', cancellable: true },
         async (_progress, token) => {
           token.onCancellationRequested(() => activeRunner?.cancel());
-          await runCli(args, 'run');
+          await runCli(args, 'run', cwd);
           refreshAll();
         },
       );
@@ -144,11 +197,13 @@ export function activate(context: vscode.ExtensionContext): void {
   // tracegraph.compareLatest
   context.subscriptions.push(
     vscode.commands.registerCommand('tracegraph.compareLatest', async () => {
+      const cwd = await pickRoot(roots, 'Select the project to compare');
+      if (!cwd) return;
       await vscode.window.withProgress(
         { location: vscode.ProgressLocation.Notification, title: 'TraceGraph: comparing...', cancellable: true },
         async (_progress, token) => {
           token.onCancellationRequested(() => activeRunner?.cancel());
-          await runCli(['compare', '--latest'], 'compare');
+          await runCli(['compare', '--latest'], 'compare', cwd);
           findingsProvider.refresh();
         },
       );
@@ -163,7 +218,9 @@ export function activate(context: vscode.ExtensionContext): void {
         placeHolder: 'Reviewed and approved',
       });
       if (!reason) return;
-      await runCli(['baseline', 'create', '--reason', reason], 'baseline create');
+      const cwd = await pickRoot(roots, 'Select the project to baseline');
+      if (!cwd) return;
+      await runCli(['baseline', 'create', '--reason', reason], 'baseline create', cwd);
       baselinesProvider.refresh();
     }),
   );
@@ -171,7 +228,9 @@ export function activate(context: vscode.ExtensionContext): void {
   // tracegraph.generatePack
   context.subscriptions.push(
     vscode.commands.registerCommand('tracegraph.generatePack', async () => {
-      await runCli(['pack'], 'pack');
+      const cwd = await pickRoot(roots, 'Select the project');
+      if (!cwd) return;
+      await runCli(['pack'], 'pack', cwd);
       vscode.window.showInformationMessage('TraceGraph: AI context packs generated.');
     }),
   );
@@ -180,41 +239,51 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.commands.registerCommand('tracegraph.openTrace', (traceFile?: string) => {
       // traceFile is passed from the tree item's command argument
-      // or can be called without an argument (prompt user to pick)
       if (traceFile && fs.existsSync(traceFile)) {
-        _openTraceInPanel(traceFile, context.extensionUri, root);
+        const traceRoot = resolveRootForFile(traceFile, roots);
+        _openTraceInPanel(traceFile, context.extensionUri, traceRoot);
         return;
       }
 
-      // Quick-pick from available trace files
-      const tracesDir = path.join(root, '.tracegraph', 'traces');
-      const files     = findTraceFiles(tracesDir);
-      if (files.length === 0) {
+      // Quick-pick from all trace files across all roots
+      const allFiles: Array<{ label: string; description: string; file: string }> = [];
+      for (const root of roots) {
+        const tracesDir = path.join(root, '.tracegraph', 'traces');
+        for (const f of findTraceFiles(tracesDir)) {
+          allFiles.push({
+            label:       path.basename(f, '.trace.json'),
+            description: path.relative(
+              vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? root,
+              f,
+            ),
+            file: f,
+          });
+        }
+      }
+
+      if (allFiles.length === 0) {
         vscode.window.showInformationMessage(
-          'No trace files found in .tracegraph/traces/. Run tracing first.',
+          'No trace files found. Run tracing first.',
         );
         return;
       }
 
-      vscode.window.showQuickPick(
-        files.map((f) => ({
-          label:       path.basename(f, '.trace.json'),
-          description: path.relative(root, f),
-          file:        f,
-        })),
-        { placeHolder: 'Select a trace to open' },
-      ).then((picked) => {
-        if (picked) {
-          _openTraceInPanel(picked.file, context.extensionUri, root);
-        }
-      });
+      vscode.window.showQuickPick(allFiles, { placeHolder: 'Select a trace to open' })
+        .then((picked) => {
+          if (picked) {
+            const traceRoot = resolveRootForFile(picked.file, roots);
+            _openTraceInPanel(picked.file, context.extensionUri, traceRoot);
+          }
+        });
     }),
   );
 
   // tracegraph.viewReport — opens the latest report
   context.subscriptions.push(
-    vscode.commands.registerCommand('tracegraph.viewReport', () => {
-      const reportFile = resolveLatestReport(root);
+    vscode.commands.registerCommand('tracegraph.viewReport', async () => {
+      const cwd = await pickRoot(roots, 'Select the project');
+      if (!cwd) return;
+      const reportFile = resolveLatestReport(cwd);
       if (!reportFile) {
         vscode.window.showInformationMessage(
           'No report found. Run `tracegraph compare --latest` first.',
@@ -226,7 +295,7 @@ export function activate(context: vscode.ExtensionContext): void {
         vscode.window.showErrorMessage(`TraceGraph: could not read report ${reportFile}`);
         return;
       }
-      TraceGraphPanel.open(context.extensionUri, root, {
+      TraceGraphPanel.open(context.extensionUri, cwd, {
         kind: 'report',
         data: report,
       });
@@ -240,10 +309,94 @@ export function deactivate(): void {
   // Nothing to clean up — subscriptions are handled by the context
 }
 
+// ─── Root discovery ───────────────────────────────────────────────────────────
+
+/**
+ * Find every directory within the current workspace that contains a
+ * `.tracegraph/` subdirectory.
+ *
+ * Searches:
+ *   - Each workspace folder directly (level 0)
+ *   - Each immediate child of each workspace folder (level 1)
+ *
+ * Level-1 search handles the common monorepo pattern:
+ *   <workspace>/
+ *     backend/   ← has .tracegraph/
+ *     frontend/
+ *
+ * Skips hidden dirs, node_modules, and vendor.
+ */
+export function findTracegraphRoots(): string[] {
+  const folders = vscode.workspace.workspaceFolders;
+  if (!folders || folders.length === 0) return [];
+
+  const roots = new Set<string>();
+  const SKIP  = new Set([
+    'node_modules', 'vendor', '.git', '.svn', 'dist', 'build', 'out',
+    '.next', '.nuxt', 'coverage', '__pycache__',
+  ]);
+
+  for (const folder of folders) {
+    const base = folder.uri.fsPath;
+
+    // Level 0
+    if (fs.existsSync(path.join(base, '.tracegraph'))) {
+      roots.add(base);
+    }
+
+    // Level 1 — only if not already found at level 0 (avoids double counting)
+    if (!roots.has(base)) {
+      try {
+        for (const entry of fs.readdirSync(base, { withFileTypes: true })) {
+          if (!entry.isDirectory()) continue;
+          if (entry.name.startsWith('.') || SKIP.has(entry.name)) continue;
+          const child = path.join(base, entry.name);
+          if (fs.existsSync(path.join(child, '.tracegraph'))) {
+            roots.add(child);
+          }
+        }
+      } catch { /* ignore permission errors */ }
+    }
+  }
+
+  return [...roots];
+}
+
+function getWorkspaceFolderPaths(): string[] {
+  return (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath);
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-function getWorkspaceRoot(): string | undefined {
-  return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+/**
+ * If there is only one root, return it immediately (no picker needed).
+ * If there are multiple roots, show a quick-pick and return the chosen one.
+ * Returns undefined if the user cancels.
+ */
+async function pickRoot(roots: string[], placeHolder: string): Promise<string | undefined> {
+  if (roots.length === 0) return undefined;
+  if (roots.length === 1) return roots[0];
+
+  const workspaceBase = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
+  const items = roots.map((r) => ({
+    label:       path.basename(r),
+    description: path.relative(workspaceBase, r) || r,
+    root:        r,
+  }));
+
+  const picked = await vscode.window.showQuickPick(items, { placeHolder });
+  return picked?.root;
+}
+
+/**
+ * Given a file path, return the root whose `.tracegraph` directory it belongs to.
+ * Falls back to the first root if no match.
+ */
+function resolveRootForFile(filePath: string, roots: string[]): string {
+  for (const root of roots) {
+    if (filePath.startsWith(root)) return root;
+  }
+  return roots[0] ?? path.dirname(filePath);
 }
 
 function _openTraceInPanel(
@@ -260,7 +413,9 @@ function _openTraceInPanel(
 }
 
 function resolveLatestReport(workspaceRoot: string): string | null {
-  const latestPtr = path.join(workspaceRoot, '.tracegraph', 'latest.json');
+  const tracegraphDir = path.join(workspaceRoot, '.tracegraph');
+  const latestPtr     = path.join(tracegraphDir, 'latest.json');
+
   if (fs.existsSync(latestPtr)) {
     try {
       const ptr = JSON.parse(fs.readFileSync(latestPtr, 'utf8')) as Record<string, unknown>;
@@ -273,7 +428,7 @@ function resolveLatestReport(workspaceRoot: string): string | null {
     } catch { /* fall through */ }
   }
 
-  const reportsDir = path.join(workspaceRoot, '.tracegraph', 'reports');
+  const reportsDir = path.join(tracegraphDir, 'reports');
   if (!fs.existsSync(reportsDir)) return null;
 
   try {

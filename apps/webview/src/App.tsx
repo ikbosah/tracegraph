@@ -23,7 +23,10 @@ export function App({ trace, report, onOpenSource }: AppProps): React.ReactEleme
   const [bannerDismissed, setBannerDismissed]   = useState(false);
   const [highlightedTraces, setHighlightedTraces] = useState<string[]>([]);
   const [showFindings, setShowFindings]         = useState(true);
-  const [traceViewMode, setTraceViewMode]       = useState<TraceViewMode>('graph');
+  // Default to timeline for large traces — graph view becomes unusable past ~150 events
+  const [traceViewMode, setTraceViewMode]       = useState<TraceViewMode>(
+    () => ((trace?.events?.length ?? 0) > 150 ? 'timeline' : 'graph'),
+  );
 
   // ── Empty state ─────────────────────────────────────────────────────────────
   if (!trace && !report) {
@@ -91,8 +94,9 @@ export function App({ trace, report, onOpenSource }: AppProps): React.ReactEleme
   }
 
   // ── Trace mode ──────────────────────────────────────────────────────────────
-  const graph      = traceSessionToGraph(trace!);
-  const showBanner = !bannerDismissed;
+  const graph        = traceSessionToGraph(trace!);
+  const showBanner   = !bannerDismissed;
+  const isLargeTrace = (trace!.events?.length ?? 0) > 150;
 
   const entrypointLabel =
     trace!.entrypoint.type === 'http_request'
@@ -121,10 +125,16 @@ export function App({ trace, report, onOpenSource }: AppProps): React.ReactEleme
               aria-selected={traceViewMode === mode}
               className={`view-mode-tab${traceViewMode === mode ? ' view-mode-tab-active' : ''}`}
               onClick={() => setTraceViewMode(mode)}
+              title={mode === 'graph' && isLargeTrace
+                ? `Large trace — events are grouped into summary nodes`
+                : undefined}
             >
-              {mode === 'graph'       ? 'Graph'      :
-               mode === 'timeline'   ? 'Timeline'   :
-                                       'Error Path'}
+              {mode === 'graph'     ? 'Graph'      :
+               mode === 'timeline' ? 'Timeline'   :
+                                     'Error Path'}
+              {mode === 'graph' && isLargeTrace && (
+                <span style={{ marginLeft: 4, fontSize: 10, opacity: 0.6 }}>grouped</span>
+              )}
             </button>
           ))}
         </div>

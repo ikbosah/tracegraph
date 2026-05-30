@@ -31,7 +31,8 @@
     "theme": "dark"
   },
   "activationEvents": [
-    "workspaceContains:.tracegraph"
+    "workspaceContains:.tracegraph",
+    "workspaceContains:**/.tracegraph"
   ],
   "main": "./dist/extension.js",
   "contributes": {

@@ -2,6 +2,9 @@
  * T8.6 — Scenarios sidebar provider
  *
  * Lists `.scenario.json` files found in `.tracegraph/scenarios/`.
+ *
+ * Monorepo support:
+ *   Accepts an array of roots and aggregates scenarios from every root.
  */
 
 import * as vscode from 'vscode';
@@ -32,7 +35,11 @@ export class ScenariosProvider implements vscode.TreeDataProvider<ScenarioItem> 
   readonly onDidChangeTreeData: vscode.Event<ScenarioItem | undefined | void> =
     this._onDidChangeTreeData.event;
 
-  constructor(private readonly workspaceRoot: string) {}
+  constructor(private roots: string[]) {}
+
+  setRoots(roots: string[]): void {
+    this.roots = roots;
+  }
 
   refresh(): void {
     this._onDidChangeTreeData.fire();
@@ -43,25 +50,31 @@ export class ScenariosProvider implements vscode.TreeDataProvider<ScenarioItem> 
   }
 
   getChildren(): vscode.ProviderResult<ScenarioItem[]> {
-    const dir = path.join(this.workspaceRoot, '.tracegraph', 'scenarios');
-    if (!fs.existsSync(dir)) return [];
+    const items: ScenarioItem[] = [];
 
-    let files: string[];
-    try {
-      files = fs
-        .readdirSync(dir)
-        .filter((f) => f.endsWith('.scenario.json'))
-        .map((f) => path.join(dir, f));
-    } catch {
-      return [];
+    for (const root of this.roots) {
+      const dir = path.join(root, '.tracegraph', 'scenarios');
+      if (!fs.existsSync(dir)) continue;
+
+      let files: string[];
+      try {
+        files = fs
+          .readdirSync(dir)
+          .filter((f) => f.endsWith('.scenario.json'))
+          .map((f) => path.join(dir, f));
+      } catch {
+        continue;
+      }
+
+      for (const f of files) {
+        const meta  = tryReadScenarioMeta(f);
+        const label = meta?.name ?? path.basename(f, '.scenario.json');
+        const desc  = meta?.description ?? '';
+        items.push(new ScenarioItem(f, label, desc));
+      }
     }
 
-    return files.map((f) => {
-      const meta  = tryReadScenarioMeta(f);
-      const label = meta?.name ?? path.basename(f, '.scenario.json');
-      const desc  = meta?.description ?? '';
-      return new ScenarioItem(f, label, desc);
-    });
+    return items;
   }
 }
 

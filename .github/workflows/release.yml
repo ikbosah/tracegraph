@@ -33,6 +33,15 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Build webview
+        run: pnpm --filter '@tracegraph/webview' build
+
+      - name: Copy webview bundle into CLI package
+        run: |
+          mkdir -p packages/cli/webview-bundle
+          cp apps/webview/dist/tracegraph-viewer.iife.js packages/cli/webview-bundle/
+          cp apps/webview/dist/tracegraph-viewer.css     packages/cli/webview-bundle/
+
       - name: Build all publishable packages
         run: pnpm --filter './packages/*' build
 

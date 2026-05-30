@@ -5,9 +5,8 @@
  * T8.2 — CliRunner wiring
  * T8.3 — FileWatcher wiring
  *
- * Activation:
- *   workspaceContains:.tracegraph  (root-level)
- *   workspaceContains:**/.tracegraph  (monorepo subfolders)
+ * Activation: workspaceContains:.tracegraph (root-level and monorepo
+ *   subfolders — see activationEvents in package.json).
  *
  * Monorepo support:
  *   findTracegraphRoots() scans each workspace folder and its immediate
@@ -19,7 +18,7 @@
  *               createBaseline, generatePack, refresh
  *   - Views: tracegraphTraces, tracegraphFindings, tracegraphBaselines,
  *            tracegraphScenarios
- *   - File watcher → auto-refresh sidebar trees
+ *   - File watcher and auto-refresh sidebar trees
  *   - Output channel for CLI stdout/stderr
  */
 

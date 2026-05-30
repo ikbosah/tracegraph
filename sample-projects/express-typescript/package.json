@@ -1,6 +1,6 @@
 {
   "name": "tracegraph-sample-express",
-  "version": "0.0.2",
+  "version": "0.2.0",
   "private": true,
   "description": "Sample Express TypeScript API demonstrating TraceGraph M1 onboarding",
   "main": "src/app.ts",

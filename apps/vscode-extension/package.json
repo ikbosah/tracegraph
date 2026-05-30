@@ -2,7 +2,7 @@
   "name": "tracegraph-vscode",
   "displayName": "TraceGraph",
   "description": "Runtime behaviour tracing, change coverage, and AI context packs for VS Code.",
-  "version": "0.1.4",
+  "version": "0.2.0",
   "publisher": "tracegraph",
   "private": true,
   "license": "Apache License",

@@ -1,6 +1,6 @@
 {
   "name": "tracegraph-sample-inventory-service",
-  "version": "0.0.2",
+  "version": "0.2.0",
   "private": true,
   "description": "Inventory service — half of the microservices sample. Manages product stock.",
   "main": "src/app.ts",

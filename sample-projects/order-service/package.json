@@ -1,6 +1,6 @@
 {
   "name": "tracegraph-sample-order-service",
-  "version": "0.0.2",
+  "version": "0.2.0",
   "private": true,
   "description": "Order service — half of the microservices sample. Calls inventory-service; emits auth_check events.",
   "main": "src/app.ts",

@@ -57,6 +57,8 @@ import {
   serverLogsCommand,
 } from './commands/server';
 import { pullBaselinesFromTeamServer } from './commands/team-server';
+import { testgenCommand }              from './commands/testgen';
+import { baselineSuggestUpdateCommand } from './commands/baseline-suggest';
 
 // ── Extract the wrapped command (everything after --) ─────────────────────
 const rawArgv     = process.argv.slice(2); // strip 'node' and script path
@@ -546,6 +548,42 @@ baselineCmd
       baselinesDir,
     );
     process.exit(count >= 0 ? EXIT_CODES.SUCCESS : EXIT_CODES.CLI_ERROR);
+  });
+
+// ── tracegraph baseline suggest-update ───────────────────────────────────────
+// (added to the existing baseline command group)
+baselineCmd
+  .command('suggest-update')
+  .description('Analyse the diff between current traces and baselines; suggest safe updates')
+  .option('--trace <file>',           'Analyse a specific trace file instead of the latest run')
+  .option('--interactive',            'Walk through each suggestion interactively')
+  .option('--accept-suggestions',     'Automatically write baselines for all SAFE traces')
+  .option('--approved-by <name>',     'Name to record on written baselines')
+  .option('--reason <reason>',        'Reason to record on written baselines')
+  .action(async (options: {
+    trace?:             string;
+    interactive?:       boolean;
+    acceptSuggestions?: boolean;
+    approvedBy?:        string;
+    reason?:            string;
+  }) => {
+    process.exit(await baselineSuggestUpdateCommand(options));
+  });
+
+// ── tracegraph testgen ────────────────────────────────────────────────────────
+program
+  .command('testgen')
+  .description('Generate HTTP test cases from a trace file')
+  .argument('<trace-file>', 'Path to a .trace.json file')
+  .option('--framework <name>',  'Test framework: express | laravel | fastapi | gin (auto-detected)')
+  .option('--out <dir>',         'Directory to write the generated test file')
+  .option('--dry-run',           'Print generated test content without writing to disk')
+  .action(async (traceFile: string, options: {
+    framework?: string;
+    out?:       string;
+    dryRun?:    boolean;
+  }) => {
+    process.exit(await testgenCommand(traceFile, options));
   });
 
 // ── tracegraph clean ──────────────────────────────────────────────────────

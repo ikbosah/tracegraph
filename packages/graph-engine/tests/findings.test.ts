@@ -192,4 +192,53 @@ describe('diffToFindings()', () => {
     const findings = diffToFindings(diff);
     expect(findings[0]!.ruleId).toBe('behavior.authorization.removed');
   });
+
+  // IMP-3.2 — route field on diff-based findings
+  it('populates route on removed-signature finding when routeMethod + routePathPattern are present', () => {
+    const diff: BehaviorDiff = {
+      ...makeEmptyDiff(),
+      removedSignatures: [makeSignatureChange({
+        signature: makeSig({
+          role:             'validation',
+          functionName:     'validateBody',
+          routeMethod:      'POST',
+          routePathPattern: '/api/orders',
+        }),
+        role: 'validation',
+      })],
+    };
+    const findings = diffToFindings(diff);
+    expect(findings[0]!.route).toBe('POST /api/orders');
+  });
+
+  it('leaves route undefined on removed-signature finding when no route info is present', () => {
+    const diff: BehaviorDiff = {
+      ...makeEmptyDiff(),
+      removedSignatures: [makeSignatureChange({
+        signature: makeSig({ role: 'validation', functionName: 'validateBody' }),
+        role: 'validation',
+      })],
+    };
+    const findings = diffToFindings(diff);
+    expect(findings[0]!.route).toBeUndefined();
+  });
+
+  it('populates route on added-authorization finding when route info is present', () => {
+    const diff: BehaviorDiff = {
+      ...makeEmptyDiff(),
+      addedSignatures: [makeSignatureChange({
+        signature: makeSig({
+          role:             'authorization',
+          routeMethod:      'GET',
+          routePathPattern: '/health',
+        }),
+        role:      'authorization',
+        critical:  true,
+        eventName: 'authMiddleware',
+      })],
+    };
+    const findings = diffToFindings(diff);
+    const authAdded = findings.find((f) => f.ruleId === 'behavior.authorization.added');
+    expect(authAdded!.route).toBe('GET /health');
+  });
 });

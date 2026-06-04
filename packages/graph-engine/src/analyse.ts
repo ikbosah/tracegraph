@@ -10,9 +10,19 @@
  *   M5.6  reliability.n_plus_one_query         — same DB query repeated N+ times
  *   M5.7  reliability.duplicate_side_effects   — same side-effect dispatched ≥ 2×
  *   M5.8  reliability.missing_transaction      — multi-table writes without a transaction
+ *
+ * IMP-3.1: Rule configuration
+ *   Accepts an optional `ruleConfig` map keyed by ruleId.
+ *   Supports: `disabled`, `severity`, `thresholds.repetitionCount`.
  */
 import { createHash } from 'node:crypto';
-import type { TraceSession, Finding } from '@tracegraph/shared-types';
+import type {
+  TraceSession,
+  Finding,
+  FindingSeverity,
+  RemediationSnippet,
+  RuleConfig,
+} from '@tracegraph/shared-types';
 
 // ─── Rule IDs ─────────────────────────────────────────────────────────────────
 
@@ -23,11 +33,70 @@ export const ANALYSE_RULES = {
   MISSING_TRANSACTION:        'reliability.missing_transaction',
 } as const;
 
+// ─── Remediation registry (IMP-3.3) ──────────────────────────────────────────
+
+const REMEDIATIONS: Partial<Record<string, RemediationSnippet>> = {
+  [ANALYSE_RULES.SENSITIVE_DATA_IN_RESPONSE]: {
+    text: 'Remove the sensitive field from the response or redact its value before sending. Use an explicit serializer or resource layer to whitelist response fields.',
+    code: {
+      express:
+        '// Use an explicit DTO / serializer:\nconst safe = { id: user.id, email: user.email };\nres.json(safe); // never spread the whole model',
+      laravel:
+        '// Laravel API Resource:\nclass UserResource extends JsonResource {\n  public function toArray($request) {\n    return [\'id\' => $this->id, \'email\' => $this->email];\n  }\n}',
+      fastapi:
+        '# Pydantic response model:\nclass UserResponse(BaseModel):\n    id: int\n    email: str\n    # no password_hash field',
+      spring:
+        '// Jackson @JsonIgnore:\n@JsonIgnore\nprivate String passwordHash;',
+    },
+    docs: 'https://docs.tracegraph.io/rules/security-sensitive-data-in-response',
+  },
+
+  [ANALYSE_RULES.N_PLUS_ONE_QUERY]: {
+    text: 'Eager-load the related data in the initial query instead of querying inside a loop. Add a query counter assertion to prevent regressions.',
+    code: {
+      laravel:
+        '// Eager loading with with():\n$orders = Order::with(\'items\')->get();\n// Instead of:\n$orders = Order::all();\nforeach ($orders as $order) { $order->items; }',
+      express:
+        '// Batch query instead of N queries:\nconst ids = orders.map(o => o.id);\nconst items = await db.query(\n  \'SELECT * FROM items WHERE order_id = ANY($1)\',\n  [ids],\n);',
+      spring:
+        '// JOIN FETCH in JPQL:\n@Query("SELECT o FROM Order o JOIN FETCH o.items")\nList<Order> findAllWithItems();',
+      fastapi:
+        '# SQLAlchemy selectinload:\nresult = await session.execute(\n    select(Order).options(selectinload(Order.items))\n)',
+    },
+    docs: 'https://docs.tracegraph.io/rules/reliability-n-plus-one-query',
+  },
+
+  [ANALYSE_RULES.MISSING_TRANSACTION]: {
+    text: 'Wrap the multi-table writes in a database transaction to ensure atomicity. A failure mid-way through will leave the database inconsistent without a transaction boundary.',
+    code: {
+      laravel:
+        'DB::transaction(function () use ($data) {\n    $order = Order::create($data[\'order\']);\n    $order->items()->createMany($data[\'items\']);\n});',
+      express:
+        '// TypeORM / pg:\nconst queryRunner = dataSource.createQueryRunner();\nawait queryRunner.startTransaction();\ntry {\n  await queryRunner.manager.save(Order, order);\n  await queryRunner.manager.save(OrderItem, items);\n  await queryRunner.commitTransaction();\n} catch (e) {\n  await queryRunner.rollbackTransaction();\n  throw e;\n}',
+      spring:
+        '@Transactional\npublic void createOrder(OrderDto dto) {\n    orderRepository.save(toEntity(dto));\n    inventoryService.deduct(dto.items());\n}',
+      fastapi:
+        'async with session.begin():\n    session.add(order)\n    session.add_all(items)',
+    },
+    docs: 'https://docs.tracegraph.io/rules/reliability-missing-transaction',
+  },
+
+  [ANALYSE_RULES.DUPLICATE_SIDE_EFFECTS]: {
+    text: 'Verify the dispatch or outbound call is not inside a loop or on multiple code paths. Consider idempotency keys or a deduplication layer.',
+    code: {
+      laravel:
+        '// Idempotency key on queue dispatch:\nSendEmailJob::dispatch($user)->withUniqueId($user->id);',
+      express:
+        '// Pass idempotency-key header to the remote:\nfetch(url, {\n  method: \'POST\',\n  headers: { \'Idempotency-Key\': requestId },\n  body: JSON.stringify(payload),\n});',
+    },
+    docs: 'https://docs.tracegraph.io/rules/reliability-duplicate-side-effects',
+  },
+};
+
 // ─── Configuration ────────────────────────────────────────────────────────────
 
 /**
  * Normalised field names (lowercase, separators stripped) considered sensitive.
- * Presence of any of these in an HTTP response shape triggers a finding.
  */
 const SENSITIVE_FIELD_NAMES = new Set([
   // Credentials
@@ -43,8 +112,8 @@ const SENSITIVE_FIELD_NAMES = new Set([
   'ssn', 'socialsecurity',
 ]);
 
-/** Minimum identical DB queries (same table + operation) to flag as N+1. */
-const N_PLUS_ONE_THRESHOLD = 5;
+/** Default minimum identical DB queries (same table + operation) to flag as N+1. */
+const DEFAULT_N_PLUS_ONE_THRESHOLD = 5;
 
 /** DB resource operations that constitute a write (data-modifying). */
 const WRITE_OPERATIONS = new Set(['write', 'insert', 'update', 'delete', 'upsert', 'create']);
@@ -54,19 +123,59 @@ const WRITE_OPERATIONS = new Set(['write', 'insert', 'update', 'delete', 'upsert
 /**
  * Analyse a single `TraceSession` for intrinsic security and reliability
  * findings (independent of any baseline comparison).
+ *
+ * @param session    The trace to analyse.
+ * @param ruleConfig Optional per-rule configuration (IMP-3.1).
  */
-export function analyseTraceFindings(session: TraceSession): Finding[] {
+export function analyseTraceFindings(
+  session:    TraceSession,
+  ruleConfig?: Record<string, RuleConfig>,
+): Finding[] {
+  const cfg = ruleConfig ?? {};
   return [
-    ...detectSensitiveDataInResponse(session),
-    ...detectNPlusOneQuery(session),
-    ...detectDuplicateSideEffects(session),
-    ...detectMissingTransaction(session),
+    ...detectSensitiveDataInResponse(session, cfg),
+    ...detectNPlusOneQuery(session, cfg),
+    ...detectDuplicateSideEffects(session, cfg),
+    ...detectMissingTransaction(session, cfg),
   ];
+}
+
+// ─── Helpers: rule config resolution ─────────────────────────────────────────
+
+/** Returns the effective severity for a rule, respecting config overrides. */
+function effectiveSeverity(
+  ruleId:  string,
+  def:     FindingSeverity,
+  cfg:     Record<string, RuleConfig>,
+): FindingSeverity {
+  return (cfg[ruleId]?.severity as FindingSeverity | undefined) ?? def;
+}
+
+/** Returns true when a rule is disabled via config. */
+function isDisabled(ruleId: string, cfg: Record<string, RuleConfig>): boolean {
+  return cfg[ruleId]?.disabled === true;
+}
+
+/** Returns the effective numeric threshold for a rule threshold key. */
+function threshold(
+  ruleId: string,
+  key:    string,
+  def:    number,
+  cfg:    Record<string, RuleConfig>,
+): number {
+  const t = cfg[ruleId]?.thresholds?.[key];
+  return typeof t === 'number' && t > 0 ? t : def;
 }
 
 // ─── M5.4: Sensitive data in HTTP response ─────────────────────────────────
 
-function detectSensitiveDataInResponse(session: TraceSession): Finding[] {
+function detectSensitiveDataInResponse(
+  session: TraceSession,
+  cfg:     Record<string, RuleConfig>,
+): Finding[] {
+  const ruleId = ANALYSE_RULES.SENSITIVE_DATA_IN_RESPONSE;
+  if (isDisabled(ruleId, cfg)) return [];
+
   const findings: Finding[] = [];
   const seen = new Set<string>();
 
@@ -78,15 +187,15 @@ function detectSensitiveDataInResponse(session: TraceSession): Finding[] {
     for (const field of fields) {
       if (!isSensitiveFieldName(field)) continue;
 
-      const fingerprint = fp(ANALYSE_RULES.SENSITIVE_DATA_IN_RESPONSE, session.traceId, field);
+      const fingerprint = fp(ruleId, session.traceId, field);
       if (seen.has(fingerprint)) continue;
       seen.add(fingerprint);
 
       findings.push({
         id:          `find_${fingerprint}`,
         fingerprint,
-        ruleId:      ANALYSE_RULES.SENSITIVE_DATA_IN_RESPONSE,
-        severity:    'high',
+        ruleId,
+        severity:    effectiveSeverity(ruleId, 'high', cfg),
         category:    'security_sensitive_data',
         title:       `Sensitive field in HTTP response: "${field}"`,
         description: `The field "${field}" appears in the HTTP response payload and may expose ` +
@@ -96,7 +205,8 @@ function detectSensitiveDataInResponse(session: TraceSession): Finding[] {
         recommendation:
           `Remove "${field}" from the response or redact its value before sending. ` +
           `Use an API resource / serializer layer to explicitly whitelist the fields ` +
-          `your API should expose (e.g. Laravel API Resources, a JSON:API transformer).`,
+          `your API should expose.`,
+        remediation: REMEDIATIONS[ruleId],
       });
     }
   }
@@ -106,11 +216,16 @@ function detectSensitiveDataInResponse(session: TraceSession): Finding[] {
 
 // ─── M5.6: N+1 query detection ────────────────────────────────────────────────
 
-function detectNPlusOneQuery(session: TraceSession): Finding[] {
+function detectNPlusOneQuery(
+  session: TraceSession,
+  cfg:     Record<string, RuleConfig>,
+): Finding[] {
+  const ruleId = ANALYSE_RULES.N_PLUS_ONE_QUERY;
+  if (isDisabled(ruleId, cfg)) return [];
+
+  const nPlusOneThreshold = threshold(ruleId, 'repetitionCount', DEFAULT_N_PLUS_ONE_THRESHOLD, cfg);
   const findings: Finding[] = [];
 
-  // Group by (resourceType, operation) — if the same pair appears N+ times
-  // in one trace it likely reflects a loop-per-row fetch pattern.
   type Entry = { count: number; eventIds: string[]; resourceType: string; operation: string };
   const groups = new Map<string, Entry>();
 
@@ -129,10 +244,10 @@ function detectNPlusOneQuery(session: TraceSession): Finding[] {
   }
 
   for (const entry of groups.values()) {
-    if (entry.count < N_PLUS_ONE_THRESHOLD) continue;
+    if (entry.count < nPlusOneThreshold) continue;
 
     const fingerprint = fp(
-      ANALYSE_RULES.N_PLUS_ONE_QUERY,
+      ruleId,
       session.traceId,
       `${entry.resourceType}\x00${entry.operation}`,
     );
@@ -140,8 +255,8 @@ function detectNPlusOneQuery(session: TraceSession): Finding[] {
     findings.push({
       id:          `find_${fingerprint}`,
       fingerprint,
-      ruleId:      ANALYSE_RULES.N_PLUS_ONE_QUERY,
-      severity:    'medium',
+      ruleId,
+      severity:    effectiveSeverity(ruleId, 'medium', cfg),
       category:    'performance',
       title:       `Possible N+1 query: ${entry.resourceType}.${entry.operation} × ${entry.count}`,
       description: `The "${entry.operation}" operation on "${entry.resourceType}" was executed ` +
@@ -153,6 +268,8 @@ function detectNPlusOneQuery(session: TraceSession): Finding[] {
         `Use eager loading to batch-fetch related records (e.g. Eloquent \`with()\`, ` +
         `TypeORM \`relations\`, Sequelize \`include\`). Add a query counter assertion to ` +
         `your test suite to prevent regressions.`,
+      remediation: REMEDIATIONS[ruleId],
+      resource:    entry.resourceType,
     });
   }
 
@@ -161,10 +278,15 @@ function detectNPlusOneQuery(session: TraceSession): Finding[] {
 
 // ─── M5.7: Duplicate side effects ─────────────────────────────────────────────
 
-function detectDuplicateSideEffects(session: TraceSession): Finding[] {
+function detectDuplicateSideEffects(
+  session: TraceSession,
+  cfg:     Record<string, RuleConfig>,
+): Finding[] {
+  const ruleId = ANALYSE_RULES.DUPLICATE_SIDE_EFFECTS;
+  if (isDisabled(ruleId, cfg)) return [];
+
   const findings: Finding[] = [];
 
-  // Track queue dispatches and mutating outbound HTTP calls by identity key.
   type Entry = { count: number; eventIds: string[] };
   const queueGroups: Map<string, Entry>    = new Map();
   const outboundGroups: Map<string, Entry> = new Map();
@@ -189,12 +311,12 @@ function detectDuplicateSideEffects(session: TraceSession): Finding[] {
 
   for (const [name, entry] of queueGroups) {
     if (entry.count < 2) continue;
-    const fingerprint = fp(ANALYSE_RULES.DUPLICATE_SIDE_EFFECTS, session.traceId, `queue:${name}`);
+    const fingerprint = fp(ruleId, session.traceId, `queue:${name}`);
     findings.push({
       id:          `find_${fingerprint}`,
       fingerprint,
-      ruleId:      ANALYSE_RULES.DUPLICATE_SIDE_EFFECTS,
-      severity:    'medium',
+      ruleId,
+      severity:    effectiveSeverity(ruleId, 'medium', cfg),
       category:    'data_integrity',
       title:       `Duplicate queue dispatch: "${name}" × ${entry.count}`,
       description: `The job/event "${name}" was dispatched ${entry.count} times within a single ` +
@@ -204,6 +326,7 @@ function detectDuplicateSideEffects(session: TraceSession): Finding[] {
       recommendation:
         `Verify the dispatch is not inside a loop or on multiple code paths. ` +
         `Consider idempotency keys or a deduplication layer in the queue consumer.`,
+      remediation: REMEDIATIONS[ruleId],
     });
   }
 
@@ -212,12 +335,12 @@ function detectDuplicateSideEffects(session: TraceSession): Finding[] {
     const colonIdx = key.indexOf(':');
     const method   = key.slice(0, colonIdx);
     const url      = key.slice(colonIdx + 1);
-    const fingerprint = fp(ANALYSE_RULES.DUPLICATE_SIDE_EFFECTS, session.traceId, key);
+    const fingerprint = fp(ruleId, session.traceId, key);
     findings.push({
       id:          `find_${fingerprint}`,
       fingerprint,
-      ruleId:      ANALYSE_RULES.DUPLICATE_SIDE_EFFECTS,
-      severity:    'medium',
+      ruleId,
+      severity:    effectiveSeverity(ruleId, 'medium', cfg),
       category:    'data_integrity',
       title:       `Duplicate outbound ${method}: "${url}" × ${entry.count}`,
       description: `An outbound ${method} request to "${url}" was made ${entry.count} times in a ` +
@@ -227,6 +350,7 @@ function detectDuplicateSideEffects(session: TraceSession): Finding[] {
       recommendation:
         `Check whether the call appears in a loop or on multiple branches. ` +
         `If idempotency is required, pass an idempotency key in the request headers.`,
+      remediation: REMEDIATIONS[ruleId],
     });
   }
 
@@ -235,8 +359,13 @@ function detectDuplicateSideEffects(session: TraceSession): Finding[] {
 
 // ─── M5.8: Missing transaction boundary ───────────────────────────────────────
 
-function detectMissingTransaction(session: TraceSession): Finding[] {
-  // If the trace already has a transaction event, it's covered.
+function detectMissingTransaction(
+  session: TraceSession,
+  cfg:     Record<string, RuleConfig>,
+): Finding[] {
+  const ruleId = ANALYSE_RULES.MISSING_TRANSACTION;
+  if (isDisabled(ruleId, cfg)) return [];
+
   const hasTransaction = session.events.some(
     (e) =>
       e.type === 'transaction_start' ||
@@ -245,7 +374,6 @@ function detectMissingTransaction(session: TraceSession): Finding[] {
   );
   if (hasTransaction) return [];
 
-  // Collect write events and their target tables.
   const writeEvents = session.events.filter(
     (e) =>
       e.type === 'db_query' &&
@@ -253,14 +381,12 @@ function detectMissingTransaction(session: TraceSession): Finding[] {
       WRITE_OPERATIONS.has(e.resource.operation),
   );
 
-  // Only flag when writes touch ≥ 2 distinct tables.
-  // A single-table write failing mid-request is normally safe (atomic).
   const tables = new Set(writeEvents.map((e) => e.resource!.type));
   if (tables.size < 2) return [];
 
   const sortedTables = [...tables].sort();
   const fingerprint  = fp(
-    ANALYSE_RULES.MISSING_TRANSACTION,
+    ruleId,
     session.traceId,
     sortedTables.join(','),
   );
@@ -269,8 +395,8 @@ function detectMissingTransaction(session: TraceSession): Finding[] {
   return [{
     id:          `find_${fingerprint}`,
     fingerprint,
-    ruleId:      ANALYSE_RULES.MISSING_TRANSACTION,
-    severity:    'medium',
+    ruleId,
+    severity:    effectiveSeverity(ruleId, 'medium', cfg),
     category:    'data_integrity',
     title:       `Multi-table write without transaction: ${tableList}`,
     description: `Write operations were performed on multiple tables (${tableList}) within a single ` +
@@ -284,6 +410,7 @@ function detectMissingTransaction(session: TraceSession): Finding[] {
       `Wrap the multi-table writes in a database transaction. ` +
       `Laravel: \`DB::transaction(fn() => ...)\`. ` +
       `Express/TypeORM: \`dataSource.transaction(async (em) => ...)\`.`,
+    remediation: REMEDIATIONS[ruleId],
   }];
 }
 
@@ -306,8 +433,6 @@ function isSensitiveFieldName(field: string): boolean {
 
 /**
  * Collect keys from a plain object up to 2 levels deep.
- * Top-level keys always; one level of nesting to catch shapes like
- * `{ data: { password: ... } }` without excessive recursion.
  */
 function collectKeys(obj: Record<string, unknown>, depth = 0): string[] {
   const keys: string[] = [];

@@ -96,12 +96,70 @@ export function activate(context: vscode.ExtensionContext): void {
     }
 
     switch (e.kind) {
-      case 'trace':    tracesProvider.refresh();    break;
+      case 'trace':
+        tracesProvider.refresh();
+        // IMP-1 T-IMP1.4: offer to create a baseline when none exists for this trace
+        if (cfg.get<boolean>('baselineGuidance', true)) {
+          offerBaselineCreation(e.uri);
+        }
+        break;
       case 'report':   findingsProvider.refresh();  break;
       case 'baseline': baselinesProvider.refresh(); break;
       case 'scenario': scenariosProvider.refresh(); break;
     }
   });
+
+  /**
+   * IMP-1 T-IMP1.4 — Guided baseline creation.
+   *
+   * When a new .trace.json appears and no baseline exists for its traceId,
+   * show an information message offering to create one.
+   * Users can permanently opt out per-test via "Never for this test".
+   */
+  async function offerBaselineCreation(traceUri: vscode.Uri): Promise<void> {
+    try {
+      const tracePath = traceUri.fsPath;
+
+      // Derive project root from trace path (traces live in {root}/.tracegraph/traces/)
+      const tracegraphDir = path.dirname(path.dirname(tracePath));
+      const projectRoot   = path.dirname(tracegraphDir);
+
+      // Extract traceId from filename: {traceId}.trace.json
+      const traceId = path.basename(tracePath, '.trace.json');
+
+      // Check if a baseline already exists
+      const baselineFile = path.join(tracegraphDir, 'baselines', `${traceId}.baseline.json`);
+      if (fs.existsSync(baselineFile)) return;
+
+      // Check the skip list
+      const skipFile = path.join(tracegraphDir, '.baseline-skip');
+      if (fs.existsSync(skipFile)) {
+        const skipped = fs.readFileSync(skipFile, 'utf8').split('\n').map((s) => s.trim());
+        if (skipped.includes(traceId)) return;
+      }
+
+      const action = await vscode.window.showInformationMessage(
+        `TraceGraph: No baseline for trace "${traceId.slice(0, 16)}…". Create one now?`,
+        'Create Baseline',
+        'Not now',
+        'Never for this test',
+      );
+
+      if (action === 'Create Baseline') {
+        await runCli(
+          ['baseline', 'create', '--reason', 'Created via VS Code guidance'],
+          'Create Baseline',
+          projectRoot,
+        );
+      } else if (action === 'Never for this test') {
+        try {
+          fs.appendFileSync(skipFile, traceId + '\n', 'utf8');
+        } catch { /* non-fatal */ }
+      }
+    } catch {
+      // Never let the guidance feature crash the extension
+    }
+  }
 
   // ── Helpers ─────────────────────────────────────────────────────────────────
 

@@ -12,7 +12,11 @@
  *   effective when that event actually appears in the candidate trace.  If the
  *   compensating function disappears, the suppression becomes invalid and the
  *   finding surfaces as "open" (Critical if the original finding was Critical).
- * 
+ *
+ * IMP-3.2: Scoped suppressions
+ *   Suppressions can now include `route`, `resource`, and `file` scope fields.
+ *   ALL specified scope fields must match (AND logic) for the suppression to apply.
+ *   `fingerprint`-based approvals always take precedence over scoped suppressions.
  */
 import type {
   Finding,
@@ -56,11 +60,14 @@ function evaluate(
     };
   }
 
-  // 2. Check suppressions (ruleId + semanticTarget match + requiresEvidence)
+  // 2. Check suppressions (ruleId + semanticTarget + scope fields + requiresEvidence)
   for (const suppression of suppressions) {
     if (suppression.ruleId !== finding.ruleId) continue;
     if (new Date(suppression.expiresAt).getTime() < now) continue;
     if (!semanticTargetMatches(suppression.semanticTarget, finding)) continue;
+
+    // IMP-3.2: Check scoped fields (route, resource, file) — all must match.
+    if (!scopedFieldsMatch(suppression, finding)) continue;
 
     // Check all requiresEvidence items exist in the candidate session
     if (suppression.requiresEvidence && suppression.requiresEvidence.length > 0) {
@@ -87,6 +94,55 @@ function evaluate(
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/**
+ * IMP-3.2: Check whether a suppression's scope fields (route, resource, file)
+ * match the finding. All specified fields must match (AND logic).
+ * Uses simple glob matching: "*" = wildcard, "?" = single char.
+ */
+function scopedFieldsMatch(suppression: Suppression, finding: Finding): boolean {
+  if (suppression.route) {
+    const route = finding.route ?? '';
+    if (!globMatch(suppression.route, route)) return false;
+  }
+
+  if (suppression.resource) {
+    const resource = finding.resource ?? '';
+    if (!globMatch(suppression.resource, resource)) return false;
+  }
+
+  if (suppression.file) {
+    // Match against any evidence file
+    const evidenceFiles = finding.evidence.map((e) => e.file ?? '').filter(Boolean);
+    if (evidenceFiles.length === 0) return false;
+    const anyMatch = evidenceFiles.some((f) => globMatch(suppression.file!, f));
+    if (!anyMatch) return false;
+  }
+
+  return true;
+}
+
+/**
+ * Minimal glob matching: supports `*` (any sequence) and `?` (one char).
+ * Case-insensitive. Suitable for route and file patterns.
+ */
+function globMatch(pattern: string, value: string): boolean {
+  // Exact match fast-path
+  if (!pattern.includes('*') && !pattern.includes('?')) {
+    return pattern.toLowerCase() === value.toLowerCase();
+  }
+  // Convert glob to regex
+  const re = new RegExp(
+    '^' +
+    pattern
+      .replace(/[.+^${}()|[\]\\]/g, '\\$&')  // escape regex metacharacters
+      .replace(/\*/g, '.*')
+      .replace(/\?/g, '.') +
+    '$',
+    'i',
+  );
+  return re.test(value);
+}
 
 /**
  * Check whether a suppression's `semanticTarget` matches a finding.

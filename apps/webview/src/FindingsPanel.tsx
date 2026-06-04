@@ -136,6 +136,39 @@ export function FindingsPanel({
   );
 }
 
+// ─── Remediation code block ───────────────────────────────────────────────────
+
+interface RemediationCodeProps {
+  code: Partial<Record<string, string>>;
+}
+
+function RemediationCode({ code }: RemediationCodeProps): React.ReactElement {
+  const [activeTab, setActiveTab] = React.useState<string>(Object.keys(code)[0] ?? '');
+  const frameworks = Object.keys(code);
+
+  return (
+    <div className="remediation-code">
+      {/* Framework tabs */}
+      {frameworks.length > 1 && (
+        <div className="remediation-tabs">
+          {frameworks.map((fw) => (
+            <button
+              key={fw}
+              className={`remediation-tab${activeTab === fw ? ' active' : ''}`}
+              onClick={() => setActiveTab(fw)}
+            >
+              {fw}
+            </button>
+          ))}
+        </div>
+      )}
+      <pre className="remediation-snippet">
+        <code>{code[activeTab] ?? ''}</code>
+      </pre>
+    </div>
+  );
+}
+
 // ─── Finding row ──────────────────────────────────────────────────────────────
 
 interface FindingRowProps {
@@ -183,6 +216,27 @@ function FindingRow({
             <div className="finding-recommendation">
               <span className="finding-rec-label">Recommendation</span>
               <p>{finding.recommendation}</p>
+            </div>
+          )}
+
+          {/* IMP-3.3: Remediation snippets */}
+          {finding.remediation && (
+            <div className="finding-remediation">
+              <span className="finding-rec-label">How to fix</span>
+              <p className="finding-remediation-text">{finding.remediation.text}</p>
+              {finding.remediation.code && Object.keys(finding.remediation.code).length > 0 && (
+                <RemediationCode code={finding.remediation.code} />
+              )}
+              {finding.remediation.docs && (
+                <a
+                  className="finding-remediation-docs"
+                  href={finding.remediation.docs}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Documentation ↗
+                </a>
+              )}
             </div>
           )}
 

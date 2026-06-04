@@ -5,5 +5,7 @@ packages:
   - 'integrations/*'
 allowBuilds:
   '@vscode/vsce-sign': set this to true or false
+  bcrypt: true
+  better-sqlite3: true
   esbuild: false
   keytar: set this to true or false

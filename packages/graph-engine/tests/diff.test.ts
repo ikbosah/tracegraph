@@ -150,4 +150,78 @@ describe('diffBaseline()', () => {
     expect(diff.traceId).toBe('trace_cand');
     expect(diff.baselineId).toBe(baseline.baselineId);
   });
+
+  // ── IMP-5.1: Multiset sibling comparison ────────────────────────────────
+
+  it('same 3 children in different order → 0 added, 0 removed (multiset)', () => {
+    // Baseline: validateInput, processPayment, sendNotification
+    const baseline = makeBaseline([
+      { name: 'validateInput',    functionName: 'validateInput' },
+      { name: 'processPayment',   functionName: 'processPayment' },
+      { name: 'sendNotification', functionName: 'sendNotification' },
+    ]);
+    // Candidate: same three, different order
+    const candidate = makeSession([
+      { name: 'processPayment',   functionName: 'processPayment' },
+      { name: 'sendNotification', functionName: 'sendNotification' },
+      { name: 'validateInput',    functionName: 'validateInput' },
+    ]);
+    const diff = diffBaseline(baseline, candidate);
+
+    // IMP-5.1: multiset comparison — reordering is not a diff
+    expect(diff.removedSignatures).toHaveLength(0);
+    expect(diff.addedSignatures).toHaveLength(0);
+  });
+
+  it('one call genuinely missing → 1 removed (unchanged from before)', () => {
+    const baseline = makeBaseline([
+      { name: 'validateInput',  functionName: 'validateInput' },
+      { name: 'processPayment', functionName: 'processPayment' },
+      { name: 'auditLog',       functionName: 'auditLog' },
+    ]);
+    const candidate = makeSession([
+      { name: 'validateInput',  functionName: 'validateInput' },
+      { name: 'processPayment', functionName: 'processPayment' },
+      // auditLog removed
+    ]);
+    const diff = diffBaseline(baseline, candidate);
+
+    expect(diff.removedSignatures).toHaveLength(1);
+    expect(diff.removedSignatures[0]!.signature.functionName).toBe('auditLog');
+    expect(diff.addedSignatures).toHaveLength(0);
+  });
+
+  it('signature count reduced (2→1) → detected as removed', () => {
+    // Baseline: validateInput called twice (count=2 in baseline)
+    const baseline = makeBaseline([
+      { name: 'validateInput', functionName: 'validateInput' },
+      { name: 'validateInput', functionName: 'validateInput' }, // second call
+    ]);
+    // Candidate: validateInput called only once
+    const candidate = makeSession([
+      { name: 'validateInput', functionName: 'validateInput' },
+    ]);
+    const diff = diffBaseline(baseline, candidate);
+
+    // The count dropped from 2 to 1 → one SignatureChange for removal
+    expect(diff.removedSignatures).toHaveLength(1);
+    expect(diff.removedSignatures[0]!.signature.functionName).toBe('validateInput');
+  });
+
+  it('signature count increased (1→3) → detected as added', () => {
+    const baseline = makeBaseline([
+      { name: 'validateInput', functionName: 'validateInput' },
+    ]);
+    const candidate = makeSession([
+      { name: 'validateInput', functionName: 'validateInput' },
+      { name: 'validateInput', functionName: 'validateInput' }, // 2 extra calls
+      { name: 'validateInput', functionName: 'validateInput' },
+    ]);
+    const diff = diffBaseline(baseline, candidate);
+
+    // Count increased 1→3 → one added SignatureChange
+    expect(diff.addedSignatures).toHaveLength(1);
+    expect(diff.addedSignatures[0]!.signature.functionName).toBe('validateInput');
+    expect(diff.removedSignatures).toHaveLength(0);
+  });
 });

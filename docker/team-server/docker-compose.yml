@@ -1,0 +1,41 @@
+# TraceGraph Team Server — Docker Compose
+#
+# Usage:
+#   docker compose up -d
+#
+# The server will be available at http://localhost:3000
+# Data is persisted in the ./data volume.
+#
+# To change the admin password, set TRACEGRAPH_ADMIN_PASSWORD in a .env file.
+
+version: "3.9"
+
+services:
+  team-server:
+    build:
+      context: ../..
+      dockerfile: docker/team-server/Dockerfile
+    image: tracegraph/team-server:latest
+    container_name: tracegraph-team-server
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      PORT: 3000
+      TRACEGRAPH_DATA_DIR: /data
+      TRACEGRAPH_ADMIN_EMAIL:    "${TRACEGRAPH_ADMIN_EMAIL:-admin@localhost}"
+      TRACEGRAPH_ADMIN_PASSWORD: "${TRACEGRAPH_ADMIN_PASSWORD:-changeme}"
+      TRACEGRAPH_CORS_ORIGINS:   "${TRACEGRAPH_CORS_ORIGINS:-http://localhost:3000}"
+      NODE_ENV: production
+    volumes:
+      - tracegraph-data:/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  tracegraph-data:
+    driver: local

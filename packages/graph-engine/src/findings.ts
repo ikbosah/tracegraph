@@ -64,6 +64,11 @@ export function diffToFindings(diff: BehaviorDiff): Finding[] {
     if (seen.has(fingerprint)) continue;
     seen.add(fingerprint);
 
+    const routeStr = [
+      removed.signature.routeMethod ?? '',
+      removed.signature.routePathPattern ?? '',
+    ].join(' ').trim() || undefined;
+
     findings.push({
       id:          `find_${fingerprint}`,
       fingerprint,
@@ -74,6 +79,7 @@ export function diffToFindings(diff: BehaviorDiff): Finding[] {
       description,
       evidence:    [{ traceId: diff.traceId, eventIds: [] }],
       recommendation,
+      route:       routeStr,
     });
   }
 
@@ -87,6 +93,11 @@ export function diffToFindings(diff: BehaviorDiff): Finding[] {
     if (seen.has(fingerprint)) continue;
     seen.add(fingerprint);
 
+    const addedRouteStr = [
+      added.signature.routeMethod ?? '',
+      added.signature.routePathPattern ?? '',
+    ].join(' ').trim() || undefined;
+
     findings.push({
       id:          `find_${fingerprint}`,
       fingerprint,
@@ -98,6 +109,7 @@ export function diffToFindings(diff: BehaviorDiff): Finding[] {
                    `Verify this is intentional and does not break existing authorized flows.`,
       evidence:    [{ traceId: diff.traceId, eventIds: added.eventId ? [added.eventId] : [] }],
       recommendation: 'Review the new authorization check and ensure all legitimate callers are still permitted.',
+      route:       addedRouteStr,
     });
   }
 

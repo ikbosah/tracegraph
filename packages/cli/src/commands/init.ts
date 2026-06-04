@@ -5,11 +5,15 @@
  * adds four scripts to package.json, creates tracegraph.config.json,
  * and updates .gitignore (idempotently).
  */
-import fs   from 'fs';
-import path from 'path';
+import fs            from 'fs';
+import path          from 'path';
+import { spawnSync } from 'child_process';
 
 export function initCommand(): void {
   const cwd = process.cwd();
+
+  // ── Pre-flight environment checks ─────────────────────────────────────────
+  runPreflightChecks(cwd);
 
   const pm         = detectPackageManager(cwd);
   const testRunner = detectTestRunner(cwd);
@@ -155,6 +159,155 @@ const GITIGNORE_ENTRIES = [
   '.tracegraph/bundles/',
   '.tracegraph/index.json',
 ];
+
+// ─── Pre-flight environment checks ───────────────────────────────────────────
+
+type CheckResult = { label: string; value: string; ok: boolean; hint?: string };
+
+function runPreflightChecks(cwd: string): void {
+  process.stdout.write('[tracegraph] Checking your environment...\n\n');
+
+  const results: CheckResult[] = [];
+
+  // Node.js version (required ≥18)
+  const nodeVersion = process.versions.node ?? '0.0.0';
+  const nodeMajor   = parseInt(nodeVersion.split('.')[0] ?? '0', 10);
+  results.push({
+    label: 'Node.js',
+    value: nodeVersion,
+    ok:    nodeMajor >= 18,
+    hint:  nodeMajor < 18 ? 'Upgrade to Node.js 18+ (https://nodejs.org)' : undefined,
+  });
+
+  // npm / pnpm / yarn
+  const pm = detectPackageManager(cwd);
+  const pmVersion = runVersionCmd(pm, ['--version']);
+  results.push({ label: pm, value: pmVersion ?? '?', ok: pmVersion !== null });
+
+  // PHP (only if composer.json exists)
+  if (fs.existsSync(path.join(cwd, 'composer.json'))) {
+    const phpVersion = runVersionCmd('php', ['--version'], /PHP (\S+)/);
+    results.push({
+      label: 'PHP',
+      value: phpVersion ?? 'not found',
+      ok:    phpVersion !== null,
+      hint:  phpVersion === null ? 'Install PHP 8.1+ (https://www.php.net/downloads)' : undefined,
+    });
+
+    // Xdebug
+    const xdebugVersion = runVersionCmd('php', ['-r', "echo phpversion('xdebug');"], /^(\S+)/);
+    const xdebugOk = xdebugVersion !== null && xdebugVersion !== '' && xdebugVersion !== 'false';
+    results.push({
+      label: 'Xdebug',
+      value: xdebugOk ? (xdebugVersion ?? '') : 'not found',
+      ok:    xdebugOk,
+      hint:  !xdebugOk
+        ? 'PHP traces will be capture level 1 only. Install: pecl install xdebug (https://xdebug.org)'
+        : undefined,
+    });
+  }
+
+  // Python (only if requirements.txt or pyproject.toml exists)
+  if (
+    fs.existsSync(path.join(cwd, 'requirements.txt')) ||
+    fs.existsSync(path.join(cwd, 'pyproject.toml'))
+  ) {
+    const pyVersion = runVersionCmd('python3', ['--version'], /Python (\S+)/)
+      ?? runVersionCmd('python', ['--version'], /Python (\S+)/);
+    results.push({
+      label: 'Python',
+      value: pyVersion ?? 'not found',
+      ok:    pyVersion !== null,
+      hint:  pyVersion === null ? 'Install Python 3.10+ (https://www.python.org)' : undefined,
+    });
+  }
+
+  // Java (only if pom.xml or build.gradle exists)
+  if (
+    fs.existsSync(path.join(cwd, 'pom.xml')) ||
+    fs.existsSync(path.join(cwd, 'build.gradle')) ||
+    fs.existsSync(path.join(cwd, 'build.gradle.kts'))
+  ) {
+    const javaVersion = runVersionCmd('java', ['-version'], /version "([^"]+)"/);
+    results.push({
+      label: 'Java',
+      value: javaVersion ?? 'not found',
+      ok:    javaVersion !== null,
+      hint:  javaVersion === null ? 'Install JDK 17+ (https://adoptium.net)' : undefined,
+    });
+  }
+
+  // Git
+  const gitVersion = runVersionCmd('git', ['--version'], /git version (.+)/);
+  results.push({
+    label: 'Git',
+    value: gitVersion ?? 'not found',
+    ok:    gitVersion !== null,
+    hint:  gitVersion === null ? 'Git is needed for `approvedBy` attribution. Install git.' : undefined,
+  });
+
+  // Print results
+  let hasWarnings = false;
+  for (const r of results) {
+    const icon = r.ok ? '  ✓' : '  ✗';
+    process.stdout.write(`${icon}  ${r.label.padEnd(12)} ${r.value}\n`);
+    if (!r.ok && r.hint) {
+      process.stdout.write(`        → ${r.hint}\n`);
+      hasWarnings = true;
+    }
+  }
+  process.stdout.write('\n');
+
+  if (hasWarnings) {
+    process.stdout.write(
+      '[tracegraph] Some checks failed — TraceGraph will still work but capture may be limited.\n\n',
+    );
+  }
+
+  // Persist environment snapshot for `tracegraph diagnose`
+  persistEnvironmentJson(cwd, results);
+}
+
+function runVersionCmd(
+  cmd:     string,
+  args:    string[],
+  pattern?: RegExp,
+): string | null {
+  try {
+    const result = spawnSync(cmd, args, { encoding: 'utf8', timeout: 5000, shell: process.platform === 'win32' });
+    if (result.error || result.status !== 0) {
+      // Some tools write version to stderr (e.g. java -version)
+      const output = (result.stdout ?? '') + (result.stderr ?? '');
+      if (!pattern || !output) return null;
+      const m = output.match(pattern);
+      return m ? (m[1] ?? m[0] ?? null) : null;
+    }
+    const out = (result.stdout ?? '').trim() + (result.stderr ?? '').trim();
+    if (!out) return null;
+    if (!pattern) return out.split('\n')[0] ?? out;
+    const m = out.match(pattern);
+    return m ? (m[1] ?? m[0] ?? null) : null;
+  } catch {
+    return null;
+  }
+}
+
+function persistEnvironmentJson(cwd: string, results: CheckResult[]): void {
+  const tracegraphDir = path.join(cwd, '.tracegraph');
+  try {
+    fs.mkdirSync(tracegraphDir, { recursive: true });
+    const env: Record<string, string | null> = {};
+    for (const r of results) {
+      env[r.label.toLowerCase()] = r.ok ? r.value : null;
+    }
+    env['checkedAt'] = new Date().toISOString();
+    fs.writeFileSync(
+      path.join(tracegraphDir, 'environment.json'),
+      JSON.stringify(env, null, 2) + '\n',
+      'utf8',
+    );
+  } catch { /* non-fatal */ }
+}
 
 function updateGitignore(cwd: string): void {
   const gitignorePath = path.join(cwd, '.gitignore');

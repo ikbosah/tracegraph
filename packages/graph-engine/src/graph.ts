@@ -205,6 +205,8 @@ export function traceSessionToGraph(session: TraceSession): TraceGraph {
 
   // ── Pass 2: build edges ────────────────────────────────────────────────────
   const asyncGroupSeen = new Map<string, string[]>(); // groupId → [nodeIds]
+  // Use a Set for O(1) deduplication (vendor collapse can create duplicate ids)
+  const edgeIdSet = new Set<string>();
 
   for (const event of session.events) {
     if (!event.parentEventId) continue;
@@ -226,13 +228,42 @@ export function traceSessionToGraph(session: TraceSession): TraceGraph {
     }
 
     const edgeId = `${sourceNodeId}→${targetNodeId}`;
-    // Deduplicate edges (vendor collapse can create duplicates)
-    if (!edges.some((e) => e.id === edgeId)) {
+    if (!edgeIdSet.has(edgeId)) {
+      edgeIdSet.add(edgeId);
       edges.push({ id: edgeId, source: sourceNodeId, target: targetNodeId, type: edgeType });
     }
   }
 
-  return collapseSiblings({ nodes, edges, captureLevel: session.captureLevel });
+  const raw: TraceGraph = { nodes, edges, captureLevel: session.captureLevel };
+  return collapseSiblings(stripBookkeepingNodes(raw));
+}
+
+// ─── Bookkeeping-node removal ─────────────────────────────────────────────────
+
+/**
+ * Strips `trace_start` and `trace_end` nodes from the graph.
+ *
+ * These are internal lifecycle markers emitted by the trace runtime.  They add
+ * no semantic information in the visual graph — the meaningful root is always
+ * `http_request`, `test_run`, `cli_command`, etc.  Removing them eliminates
+ * two dangling nodes from every graph and prevents them from becoming isolated
+ * roots that push the layout apart.
+ *
+ * Safe to call before collapseSiblings because neither type is collapsible.
+ */
+const BOOKKEEPING_TYPES = new Set<string>(['trace_start', 'trace_end']);
+
+function stripBookkeepingNodes(graph: TraceGraph): TraceGraph {
+  const { nodes, edges, captureLevel } = graph;
+  const bookkeeping = new Set(
+    nodes.filter(n => BOOKKEEPING_TYPES.has(n.type)).map(n => n.id),
+  );
+  if (bookkeeping.size === 0) return graph;
+  return {
+    nodes: nodes.filter(n => !bookkeeping.has(n.id)),
+    edges: edges.filter(e => !bookkeeping.has(e.source) && !bookkeeping.has(e.target)),
+    captureLevel,
+  };
 }
 
 // ─── Sibling-collapse post-processing ────────────────────────────────────────

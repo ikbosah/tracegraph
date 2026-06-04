@@ -38,9 +38,12 @@ export function diffBaseline(
   baseline: CompactBaseline,
   candidate: TraceSession,
 ): BehaviorDiff {
-  // ── Build candidate signature set ────────────────────────────────────────
-  const candidateHashes = new Set<string>();
-  const candidateSignatureChanges: SignatureChange[] = [];
+  // ── Build candidate signature counts (multiset) ───────────────────────────
+  // IMP-5.1: Use count-aware multiset comparison instead of set membership.
+  // This prevents false negatives when the same signature appears multiple
+  // times in the baseline (e.g. validateInput called 3× → called 1×).
+  const candidateCounts   = new Map<string, number>();
+  const candidateSigIndex = new Map<string, SignatureChange>();
 
   for (const event of candidate.events) {
     if (event.type === 'trace_start' || event.type === 'trace_end') continue;
@@ -50,46 +53,63 @@ export function diffBaseline(
     const hash = signatureToIdentityHash(sig);
     const role = classifyRole(event);
 
-    candidateHashes.add(hash);
+    candidateCounts.set(hash, (candidateCounts.get(hash) ?? 0) + 1);
 
-    // Track for "added" detection
-    candidateSignatureChanges.push({
-      signature: sig,
-      identityHash: hash,
-      role,
-      critical: isSecurityCritical(event),
-      eventId: event.eventId,
-      eventName: event.name,
-    });
-  }
-
-  // ── Build baseline signature set ─────────────────────────────────────────
-  const baselineHashes = new Set<string>(
-    baseline.events.map((e) => signatureToIdentityHash(e.signature)),
-  );
-
-  // ── Removed signatures: in baseline but not in candidate ─────────────────
-  const removedSignatures: SignatureChange[] = [];
-  for (const entry of baseline.events) {
-    const hash = signatureToIdentityHash(entry.signature);
-    if (!candidateHashes.has(hash)) {
-      removedSignatures.push({
-        signature:    entry.signature,
+    // Keep first occurrence for output metadata
+    if (!candidateSigIndex.has(hash)) {
+      candidateSigIndex.set(hash, {
+        signature:    sig,
         identityHash: hash,
-        role:         entry.role as EventRole,
-        critical:     entry.critical ?? false,
+        role,
+        critical:     isSecurityCritical(event),
+        eventId:      event.eventId,
+        eventName:    event.name,
       });
     }
   }
 
-  // ── Added signatures: in candidate but not in baseline ───────────────────
-  const seenAdded = new Set<string>();
-  const addedSignatures: SignatureChange[] = [];
-  for (const item of candidateSignatureChanges) {
-    if (!baselineHashes.has(item.identityHash) && !seenAdded.has(item.identityHash)) {
-      seenAdded.add(item.identityHash);
-      addedSignatures.push(item);
+  // ── Build baseline signature counts (from stored .count field) ───────────
+  const baselineCounts   = new Map<string, number>();
+  const baselineSigIndex = new Map<string, { sig: typeof baseline.events[0]['signature']; role: string; critical: boolean }>();
+
+  for (const entry of baseline.events) {
+    const hash = signatureToIdentityHash(entry.signature);
+    // Baseline entries are already aggregated; sum in case of duplicates
+    baselineCounts.set(hash, (baselineCounts.get(hash) ?? 0) + entry.count);
+    if (!baselineSigIndex.has(hash)) {
+      baselineSigIndex.set(hash, {
+        sig:      entry.signature,
+        role:     entry.role,
+        critical: entry.critical ?? false,
+      });
     }
+  }
+
+  // ── Removed signatures: baseline count exceeds candidate count ───────────
+  // One SignatureChange per distinct hash regardless of how much the count
+  // decreased (avoids flooding the findings list for high-count signatures).
+  const removedSignatures: SignatureChange[] = [];
+  for (const [hash, baselineCount] of baselineCounts) {
+    const candidateCount = candidateCounts.get(hash) ?? 0;
+    if (baselineCount <= candidateCount) continue; // not reduced
+
+    const entry = baselineSigIndex.get(hash)!;
+    removedSignatures.push({
+      signature:    entry.sig,
+      identityHash: hash,
+      role:         entry.role as EventRole,
+      critical:     entry.critical,
+    });
+  }
+
+  // ── Added signatures: candidate count exceeds baseline count ─────────────
+  const addedSignatures: SignatureChange[] = [];
+  for (const [hash, candidateCount] of candidateCounts) {
+    const baselineCount = baselineCounts.get(hash) ?? 0;
+    if (candidateCount <= baselineCount) continue; // not increased
+
+    const change = candidateSigIndex.get(hash)!;
+    addedSignatures.push(change);
   }
 
   // ── Resource changes ──────────────────────────────────────────────────────

@@ -44,6 +44,8 @@ const MAX_TIMELINE_ROWS = 500;
 interface TimelineViewProps {
   trace:          TraceSession;
   onOpenSource?:  (file: string, line: number) => void;
+  /** IMP-4.3: Filter events to those matching this query. */
+  searchQuery?:   string;
 }
 
 function fmtDuration(ms: number | undefined): string {
@@ -53,11 +55,24 @@ function fmtDuration(ms: number | undefined): string {
   return `${ms.toFixed(2)}ms`;
 }
 
-export function TimelineView({ trace, onOpenSource }: TimelineViewProps): React.ReactElement {
+export function TimelineView({ trace, onOpenSource, searchQuery = '' }: TimelineViewProps): React.ReactElement {
   const { events, truncated } = useMemo(() => {
-    const all = trace.events
+    let all = trace.events
       .filter((e) => e.type !== 'trace_start' && e.type !== 'trace_end')
       .sort((a, b) => a.startTime - b.startTime);
+
+    // IMP-4.3: filter by search query when active
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase();
+      all = all.filter((e) =>
+        e.name.toLowerCase().includes(q) ||
+        e.type.toLowerCase().includes(q) ||
+        (e.displayName ?? '').toLowerCase().includes(q) ||
+        (e.file ?? '').toLowerCase().includes(q) ||
+        (e.functionName ?? '').toLowerCase().includes(q) ||
+        (e.className ?? '').toLowerCase().includes(q),
+      );
+    }
 
     if (all.length <= MAX_TIMELINE_ROWS) {
       return { events: all, truncated: 0 };

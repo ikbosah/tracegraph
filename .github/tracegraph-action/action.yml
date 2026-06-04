@@ -1,0 +1,134 @@
+name: 'TraceGraph Behaviour Analysis'
+description: 'Run TraceGraph compare and surface behavioural findings in CI. Detects security regressions, N+1 queries, and behavioural drift against approved baselines.'
+author: 'TraceGraph'
+
+branding:
+  icon:  'shield'
+  color: 'blue'
+
+inputs:
+  command:
+    description: 'The test command to trace (e.g. "pnpm test" or "npx vitest run")'
+    required: true
+
+  fail-on:
+    description: 'Severity threshold that fails the step: critical | high | medium | none'
+    default: 'critical'
+    required: false
+
+  team-server-url:
+    description: 'Team Server URL for uploading results (optional — requires token)'
+    required: false
+    default: ''
+
+  token:
+    description: 'TraceGraph API token for Team Server upload (set via secrets)'
+    required: false
+    default: ''
+
+  upload-report:
+    description: 'Upload the report JSON as a GitHub Actions artifact'
+    default: 'true'
+    required: false
+
+  slack-webhook:
+    description: 'Slack Incoming Webhook URL for posting the summary (optional)'
+    required: false
+    default: ''
+
+outputs:
+  verdict:
+    description: "Analysis verdict: pass | warn | fail"
+    value: ${{ steps.summary.outputs.verdict }}
+
+  open-findings:
+    description: "Number of open findings"
+    value: ${{ steps.summary.outputs.open-findings }}
+
+  critical-count:
+    description: "Number of critical open findings"
+    value: ${{ steps.summary.outputs.critical-count }}
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+
+    - name: Cache TraceGraph CLI installation
+      uses: actions/cache@v4
+      with:
+        path: ~/.npm
+        key: tracegraph-cli-npm-${{ runner.os }}-${{ hashFiles('**/package-lock.json', '**/pnpm-lock.yaml') }}
+        restore-keys: |
+          tracegraph-cli-npm-${{ runner.os }}-
+
+    - name: Install TraceGraph CLI
+      shell: bash
+      run: npm install -g @tracegraph/cli
+
+    - name: Restore baselines cache
+      uses: actions/cache@v4
+      with:
+        path: .tracegraph/baselines
+        key: tracegraph-baselines-${{ runner.os }}-${{ github.ref }}-${{ github.sha }}
+        restore-keys: |
+          tracegraph-baselines-${{ runner.os }}-${{ github.ref }}-
+          tracegraph-baselines-${{ runner.os }}-refs/heads/${{ github.event.repository.default_branch }}-
+
+    - name: Run tests with TraceGraph
+      shell: bash
+      run: tracegraph run -- ${{ inputs.command }}
+
+    - name: Compare against baseline
+      shell: bash
+      run: |
+        FAIL_FLAG=""
+        if [ "${{ inputs.fail-on }}" = "critical" ]; then FAIL_FLAG="--fail-on-critical"; fi
+        tracegraph compare $FAIL_FLAG || true
+
+    - name: Generate CI summary
+      id: summary
+      shell: bash
+      run: tracegraph ci-summary --format github ${{ inputs.slack-webhook != '' && format('--slack-webhook {0}', inputs.slack-webhook) || '' }}
+      continue-on-error: true
+
+    - name: Upload TraceGraph report artifact
+      if: inputs.upload-report == 'true' && always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: tracegraph-report-${{ github.run_id }}
+        path: .tracegraph/reports/
+        retention-days: 14
+        if-no-files-found: ignore
+
+    - name: Upload to Team Server
+      if: inputs.team-server-url != ''
+      shell: bash
+      run: tracegraph compare --upload ${{ inputs.team-server-url }}
+      env:
+        TRACEGRAPH_TOKEN: ${{ inputs.token }}
+
+    - name: Save updated baselines
+      if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+      uses: actions/cache/save@v4
+      with:
+        path: .tracegraph/baselines
+        key: tracegraph-baselines-${{ runner.os }}-${{ github.ref }}-${{ github.sha }}
+
+    - name: Enforce fail-on threshold
+      shell: bash
+      run: |
+        VERDICT="${{ steps.summary.outputs.verdict }}"
+        FAIL_ON="${{ inputs.fail-on }}"
+        if [ "$FAIL_ON" = "none" ]; then exit 0; fi
+        if [ "$FAIL_ON" = "critical" ] && [ "$VERDICT" = "fail" ]; then
+          echo "TraceGraph: critical findings detected — failing step"
+          exit 1
+        fi
+        if [ "$FAIL_ON" = "high" ] && ([ "$VERDICT" = "fail" ] || [ "${{ steps.summary.outputs.open-findings }}" -gt "0" ]); then
+          exit 1
+        fi
+        exit 0

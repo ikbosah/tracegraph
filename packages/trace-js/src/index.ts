@@ -14,6 +14,7 @@ export { traceExpress }           from './express';
 export { traceFunction, traceMethod } from './trace-fn';
 export { patchGlobalFetch, subscribeUndiciChannel, tracedAxios } from './http';
 export { ChildEventWriter }       from './child-writer';
+export { RequestEventBuffer }     from './request-buffer';
 export { traceStorage, getContext, writeEvent, currentParentEventId } from './context';
 export { TRACEGRAPH_ENV }         from './env';
 

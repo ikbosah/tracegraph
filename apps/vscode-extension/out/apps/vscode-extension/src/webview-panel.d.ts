@@ -14,6 +14,11 @@
  *   The webview posts `{ command: 'OPEN_SOURCE', file, line }` messages
  *   which are forwarded to `openSource()`.
  *
+ * Panel deduplication:
+ *   A static `_panels` map keyed by traceId / reportId ensures that
+ *   re-opening the same artifact reveals the existing panel rather than
+ *   spawning a duplicate.
+ *
  * Asset location:
  *   The built webview bundle is copied to `apps/vscode-extension/media/` as
  *   part of the build step.  Files:
@@ -31,9 +36,15 @@ type PanelData = {
 };
 export declare class TraceGraphPanel implements vscode.Disposable {
     private static readonly VIEW_TYPE;
+    /**
+     * Open panels keyed by artifact ID (traceId or reportId).
+     * Prevents duplicate panels for the same trace/report.
+     */
+    private static readonly _panels;
     private readonly _panel;
     private readonly _extensionUri;
     private readonly _workspaceRoot;
+    private readonly _cacheKey;
     private readonly _disposables;
     /**
      * Open (or reveal an existing) panel for `data`.

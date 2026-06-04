@@ -120,6 +120,14 @@ html, body, #root {
 }
 .empty-state h2 { font-size: 18px; color: var(--text); }
 
+/* ── Graph wrapper (contains SVG + controls + minimap) ───────────────────── */
+.graph-wrapper {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
 /* ── SVG Graph Canvas ────────────────────────────────────────────────────── */
 .graph-svg {
   width: 100%;
@@ -127,6 +135,54 @@ html, body, #root {
   cursor: grab;
 }
 .graph-svg:active { cursor: grabbing; }
+
+/* ── Zoom controls (bottom-left corner) ─────────────────────────────────── */
+.graph-controls {
+  position: absolute;
+  bottom: 16px;
+  left: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  z-index: 10;
+}
+.graph-ctrl-btn {
+  width: 30px;
+  height: 30px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.12s, border-color 0.12s, background 0.12s;
+  user-select: none;
+}
+.graph-ctrl-btn:hover {
+  color: var(--text);
+  border-color: var(--accent);
+  background: var(--surface2);
+}
+.graph-ctrl-btn:active { opacity: 0.7; }
+
+/* ── Minimap (bottom-right corner) ──────────────────────────────────────── */
+.graph-minimap {
+  position: absolute;
+  bottom: 16px;
+  right: 16px;
+  border: 1px solid rgba(51, 65, 85, 0.8);
+  border-radius: 7px;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 10;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+  display: block;
+}
 
 .graph-node {
   cursor: pointer;
@@ -483,6 +539,91 @@ html, body, #root {
 .finding-approved-note  { margin-top: 8px; color: var(--green); font-size: 11px; }
 .finding-suppressed-note { margin-top: 8px; color: var(--text-muted); font-size: 11px; }
 
+/* IMP-3.3: Remediation code snippets */
+.finding-remediation {
+  margin-top: 8px;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+.finding-remediation-text {
+  color: var(--text);
+  margin-bottom: 8px;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.remediation-code {
+  margin-top: 4px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.remediation-tabs {
+  display: flex;
+  gap: 1px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 2px 4px;
+}
+.remediation-tab {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 3px;
+  cursor: pointer;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.remediation-tab:hover   { color: var(--text); }
+.remediation-tab.active  { color: var(--accent); background: rgba(56,189,248,0.1); }
+.remediation-snippet {
+  background: var(--bg);
+  margin: 0;
+  padding: 10px 12px;
+  overflow-x: auto;
+  font-family: 'Fira Code', 'JetBrains Mono', 'Cascadia Code', monospace;
+  font-size: 10px;
+  line-height: 1.6;
+  color: #a8d1f0;
+  white-space: pre;
+}
+.finding-remediation-docs {
+  display: inline-block;
+  margin-top: 6px;
+  font-size: 10px;
+  color: var(--accent);
+  text-decoration: none;
+}
+.finding-remediation-docs:hover { text-decoration: underline; }
+
+/* IMP-4.3: Search bar */
+.search-bar-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 10px;
+}
+.search-bar {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text);
+  font-size: 11px;
+  padding: 3px 8px;
+  width: 160px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.search-bar:focus { border-color: var(--accent); }
+.search-match-count {
+  font-size: 10px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.graph-node.search-dimmed circle { opacity: 0.2; }
+
 /* ── View mode switcher ──────────────────────────────────────────────────── */
 .view-mode-tabs {
   display: flex;
@@ -660,37 +801,6 @@ html, body, #root {
 
 /* ── Error path view ─────────────────────────────────────────────────────── */
 
-/* Summary bar at the top of the error path list */
-.error-path-summary {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  padding: 6px 4px 2px;
-  flex-shrink: 0;
-}
-.error-path-summary-count {
-  font-size: 22px;
-  font-weight: 700;
-  color: var(--red);
-  line-height: 1;
-}
-.error-path-summary-label {
-  font-size: 13px;
-  color: var(--text-muted);
-}
-
-/* Repeat badge: "×3" shown when multiple identical chains are folded */
-.error-path-repeat-badge {
-  margin-left: auto;
-  font-size: 10px;
-  font-weight: 700;
-  padding: 1px 6px;
-  border-radius: 8px;
-  background: rgba(148,163,184,0.15);
-  color: var(--text-muted);
-  white-space: nowrap;
-}
-
 .error-path-empty {
   display: flex;
   flex-direction: column;
@@ -700,27 +810,37 @@ html, body, #root {
   gap: 12px;
   color: var(--green);
 }
-.error-path-empty-icon {
-  font-size: 32px;
-}
-.error-path-empty p {
-  font-size: 14px;
-  color: var(--text-muted);
-}
+.error-path-empty-icon { font-size: 32px; }
+.error-path-empty p    { font-size: 14px; color: var(--text-muted); }
 
+/* Summary bar */
+.error-path-summary {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 4px 2px 8px;
+  flex-shrink: 0;
+}
+.error-path-summary-count {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--red);
+  line-height: 1;
+}
+.error-path-summary-label { font-size: 13px; color: var(--text-muted); }
+
+/* Scrollable container */
 .error-path-container {
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: 10px;
   padding: 16px;
   overflow-y: auto;
-  /* flex: 1 + min-height: 0 is the canonical flex-fill-and-scroll pattern.
-     height: 100% in a column flex container can resolve to 0 in certain
-     Chromium/webview builds, causing all content to be clipped. */
   flex: 1;
   min-height: 0;
 }
 
+/* Each error block */
 .error-path-block {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -728,16 +848,49 @@ html, body, #root {
   overflow: hidden;
 }
 
-.error-path-heading {
+/* ── Heading (button reset so whole row is clickable) ──────────────────── */
+.error-path-heading-btn {
   display: flex;
-  align-items: baseline;
-  gap: 8px;
-  padding: 8px 14px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 14px;
   background: var(--surface2);
-  border-bottom: 1px solid var(--border);
+  border: none;
+  border-bottom: 1px solid transparent; /* becomes visible when expanded */
+  cursor: pointer;
+  text-align: left;
+  color: var(--text);
+  transition: background 0.1s;
+}
+.error-path-heading-btn:hover { background: rgba(51,65,85,0.8); }
+.error-path-block:has(.error-path-chain) .error-path-heading-btn {
+  border-bottom-color: var(--border);
+}
+
+.error-path-heading-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex-shrink: 0;
+}
+.error-path-number {
   font-size: 12px;
   font-weight: 700;
   color: var(--red);
+  white-space: nowrap;
+}
+/* Error type badge (e.g. "HttpError", "RuntimeException") */
+.error-path-errtype-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 4px;
+  background: rgba(248,113,113,0.18);
+  color: var(--red);
+  white-space: nowrap;
 }
 .error-path-heading-msg {
   font-size: 11px;
@@ -746,8 +899,61 @@ html, body, #root {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  max-width: 220px;
 }
 
+.error-path-heading-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+/* Endpoint chip (e.g. "POST /api/products/1/reserve") */
+.error-path-endpoint-chip {
+  font-family: 'SFMono-Regular', 'Consolas', monospace;
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: rgba(56,189,248,0.12);
+  color: var(--accent);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 260px;
+}
+/* Test name chip */
+.error-path-test-chip {
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: rgba(74,222,128,0.1);
+  color: var(--green);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 200px;
+}
+/* Repeat count badge */
+.error-path-repeat-badge {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 7px;
+  border-radius: 8px;
+  background: rgba(148,163,184,0.15);
+  color: var(--text-muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+/* Expand/collapse indicator */
+.error-path-chevron {
+  font-size: 9px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  margin-left: 2px;
+}
+
+/* ── Expanded chain ──────────────────────────────────────────────────────── */
 .error-path-chain {
   padding: 12px 14px;
   display: flex;
@@ -759,10 +965,9 @@ html, body, #root {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 2px 0;
-  padding-left: 12px;
+  padding: 4px 0 4px 14px;
 }
-.error-path-arrow { color: var(--text-muted); font-size: 13px; }
+.error-path-arrow        { color: var(--text-muted); font-size: 12px; }
 .error-path-causal-label {
   font-size: 9px;
   font-weight: 600;
@@ -771,17 +976,26 @@ html, body, #root {
   color: var(--text-muted);
 }
 
+/* ── Step node ───────────────────────────────────────────────────────────── */
 .error-path-step {
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 8px 12px;
+  border-radius: 5px;
+  padding: 10px 12px;
 }
+.error-path-step + .error-path-step { margin-top: 2px; }
+
 .error-path-step-error {
-  border-color: rgba(220,38,38,0.4);
-  background: rgba(220,38,38,0.06);
+  border-color: rgba(220,38,38,0.35);
+  background: rgba(220,38,38,0.05);
+}
+/* Synthetic steps (found by temporal scan, not parentEventId chain) */
+.error-path-step-synthetic {
+  border-style: dashed;
+  opacity: 0.85;
 }
 
+/* Top row inside a step */
 .error-path-step-inner {
   display: flex;
   align-items: center;
@@ -795,9 +1009,10 @@ html, body, #root {
   letter-spacing: 0.06em;
   padding: 2px 6px;
   border-radius: 3px;
-  background: rgba(255,255,255,0.06);
+  background: rgba(255,255,255,0.07);
   color: var(--text-muted);
   white-space: nowrap;
+  flex-shrink: 0;
 }
 .error-path-name {
   font-size: 12px;
@@ -805,6 +1020,14 @@ html, body, #root {
   color: var(--text);
   flex: 1;
   word-break: break-all;
+  min-width: 0;
+}
+.error-path-duration {
+  font-family: 'SFMono-Regular', 'Consolas', monospace;
+  font-size: 10px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 .error-path-loc {
   font-family: 'SFMono-Regular', 'Consolas', monospace;
@@ -814,19 +1037,35 @@ html, body, #root {
   align-items: center;
   gap: 4px;
   white-space: nowrap;
+  flex-shrink: 0;
+}
+.error-path-synthetic-label {
+  font-size: 9px;
+  color: var(--text-muted);
+  font-style: italic;
+  flex-shrink: 0;
 }
 
+/* ── Error detail box (inside a step) ───────────────────────────────────── */
 .error-path-error-box {
+  margin-top: 8px;
+  background: rgba(220,38,38,0.06);
+  border: 1px solid rgba(220,38,38,0.25);
+  border-radius: 4px;
+  padding: 8px 10px;
+}
+.error-path-error-header {
   display: flex;
-  gap: 8px;
   align-items: baseline;
-  margin-top: 6px;
+  gap: 8px;
   flex-wrap: wrap;
+  margin-bottom: 4px;
 }
 .error-path-error-type {
   font-size: 11px;
   font-weight: 700;
   color: var(--red);
+  flex-shrink: 0;
 }
 .error-path-error-msg {
   font-size: 11px;
@@ -835,20 +1074,217 @@ html, body, #root {
   word-break: break-word;
 }
 .error-path-error-stack {
-  flex-basis: 100%;
   margin-top: 6px;
   font-family: 'SFMono-Regular', 'Consolas', monospace;
   font-size: 10px;
   color: var(--text-muted);
   white-space: pre-wrap;
   word-break: break-all;
-  max-height: 180px;
+  max-height: 200px;
   overflow-y: auto;
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 3px;
   padding: 6px 8px;
   line-height: 1.5;
+}
+/* Shown when error.stack is absent */
+.error-path-no-stack {
+  font-size: 10px;
+  color: var(--text-muted);
+  font-style: italic;
+  margin-top: 4px;
+  line-height: 1.5;
+}
+.error-path-no-stack code {
+  font-family: 'SFMono-Regular', 'Consolas', monospace;
+  font-size: 10px;
+  background: rgba(255,255,255,0.07);
+  padding: 0 3px;
+  border-radius: 2px;
+  font-style: normal;
+}
+
+/* ── Collapsible input / output / raw sections ───────────────────────────── */
+.error-path-section {
+  margin-top: 6px;
+  border-top: 1px solid rgba(51,65,85,0.5);
+}
+.error-path-section-raw { opacity: 0.7; }
+.error-path-section-raw:hover { opacity: 1; }
+
+.error-path-section-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 5px 0;
+  color: var(--text-muted);
+  text-align: left;
+}
+.error-path-section-toggle:hover { color: var(--text); }
+.error-path-section-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+}
+.error-path-section-label-muted { opacity: 0.7; }
+.error-path-section-chevron { font-size: 9px; }
+
+.error-path-detail-json {
+  font-family: 'SFMono-Regular', 'Consolas', monospace;
+  font-size: 10px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 8px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 240px;
+  overflow-y: auto;
+  line-height: 1.5;
+  margin-top: 4px;
+}
+
+/* Shown when chain is a single orphan event */
+.error-path-no-context {
+  margin-top: 10px;
+  padding: 8px 10px;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-style: italic;
+  background: rgba(148,163,184,0.07);
+  border: 1px dashed rgba(148,163,184,0.25);
+  border-radius: 4px;
+  line-height: 1.5;
+}
+
+/* "Show N more patterns" button */
+.error-path-show-more {
+  align-self: center;
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 11px;
+  padding: 5px 16px;
+  border-radius: 4px;
+  cursor: pointer;
+  margin-top: 4px;
+}
+.error-path-show-more:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* ── HTTP status badges (4xx = amber, 5xx = red) ────────────────────────── */
+.error-path-status-badge {
+  padding: 1px 7px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  font-family: 'SFMono-Regular', 'Consolas', monospace;
+  flex-shrink: 0;
+  letter-spacing: 0.03em;
+}
+.error-path-status-badge-4xx {
+  background: rgba(251, 191, 36, 0.12);
+  color: #fbbf24;
+  border: 1px solid rgba(251, 191, 36, 0.3);
+}
+.error-path-status-badge-5xx {
+  background: rgba(248, 113, 113, 0.12);
+  color: #f87171;
+  border: 1px solid rgba(248, 113, 113, 0.3);
+}
+
+/* RFC status phrase shown next to the badge in the heading */
+.error-path-status-phrase {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+/* Request duration chip in the heading */
+.error-path-duration-chip {
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-family: 'SFMono-Regular', 'Consolas', monospace;
+  background: rgba(148, 163, 184, 0.08);
+  color: var(--text-muted);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  flex-shrink: 0;
+}
+/* >1s — amber warning */
+.error-path-duration-chip.error-path-duration-warn {
+  color: #fbbf24;
+  background: rgba(251, 191, 36, 0.08);
+  border-color: rgba(251, 191, 36, 0.25);
+}
+/* >5s — red, likely a timeout */
+.error-path-duration-chip.error-path-duration-slow {
+  color: #f87171;
+  background: rgba(248, 113, 113, 0.08);
+  border-color: rgba(248, 113, 113, 0.25);
+}
+
+/* ── HTTP detail inside the error box ───────────────────────────────────── */
+.error-path-http-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Description paragraph */
+.error-path-http-desc {
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--text);
+  margin: 0;
+}
+
+/* "Common causes" section */
+.error-path-causes { margin: 0; }
+
+.error-path-causes-label {
+  display: block;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  margin-bottom: 5px;
+}
+
+.error-path-causes-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.error-path-causes-list li {
+  font-size: 12px;
+  color: var(--text);
+  padding-left: 14px;
+  position: relative;
+  line-height: 1.5;
+}
+.error-path-causes-list li::before {
+  content: '·';
+  position: absolute;
+  left: 2px;
+  color: var(--text-muted);
+  font-weight: 700;
+  font-size: 14px;
+  line-height: 1.2;
 }
 
 /* ── Xdebug call stack ───────────────────────────────────────────────────── */

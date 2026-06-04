@@ -1,6 +1,6 @@
 # TraceGraph — Complete User Guide
 
-> **Version:** 0.1.4 · **Packages:** `@tracegraph/cli` and all adapters
+> **Version:** 0.2.0 · **Packages:** `@tracegraph/cli` and all adapters
 
 ---
 
@@ -13,28 +13,32 @@
 5. [Capture Levels](#5-capture-levels)
 6. [Language Adapters](#6-language-adapters)
    - [Express / Node.js](#61-express--nodejs)
-   - [traceFunction & traceMethod](#62-tracefunction--tracemethod)
-   - [Outbound HTTP Tracking](#63-outbound-http-tracking)
-   - [Vitest Reporter](#64-vitest-reporter)
-   - [Jest Reporter](#65-jest-reporter)
-   - [Laravel (PHP)](#66-laravel-php)
-   - [PHPUnit Extension](#67-phpunit-extension)
-   - [Xdebug Integration](#68-xdebug-integration)
+   - [Server Mode (per-request tracing)](#62-server-mode-per-request-tracing)
+   - [traceFunction & traceMethod](#63-tracefunction--tracemethod)
+   - [Outbound HTTP Tracking](#64-outbound-http-tracking)
+   - [Vitest Reporter](#65-vitest-reporter)
+   - [Jest Reporter](#66-jest-reporter)
+   - [Laravel (PHP)](#67-laravel-php)
+   - [PHPUnit Extension](#68-phpunit-extension)
+   - [Xdebug Integration](#69-xdebug-integration)
 7. [CLI Command Reference](#7-cli-command-reference)
-   - [tracegraph init](#71-tracegraph-init)
-   - [tracegraph run](#72-tracegraph-run)
-   - [tracegraph open](#73-tracegraph-open)
-   - [tracegraph diagnose](#74-tracegraph-diagnose)
-   - [tracegraph baseline](#75-tracegraph-baseline)
-   - [tracegraph compare](#76-tracegraph-compare)
-   - [tracegraph finding](#77-tracegraph-finding)
-   - [tracegraph report](#78-tracegraph-report)
-   - [tracegraph scenario](#79-tracegraph-scenario)
-   - [tracegraph import xdebug](#710-tracegraph-import-xdebug)
-   - [tracegraph coverage](#711-tracegraph-coverage)
-   - [tracegraph pack](#712-tracegraph-pack)
-   - [tracegraph schema](#713-tracegraph-schema)
-   - [tracegraph clean & storage](#714-tracegraph-clean--storage-status)
+   - [tracegraph quick](#71-tracegraph-quick)
+   - [tracegraph init](#72-tracegraph-init)
+   - [tracegraph adopt](#73-tracegraph-adopt)
+   - [tracegraph run](#74-tracegraph-run)
+   - [tracegraph open](#75-tracegraph-open)
+   - [tracegraph diagnose](#76-tracegraph-diagnose)
+   - [tracegraph baseline](#77-tracegraph-baseline)
+   - [tracegraph compare](#78-tracegraph-compare)
+   - [tracegraph finding](#79-tracegraph-finding)
+   - [tracegraph ci-summary](#710-tracegraph-ci-summary)
+   - [tracegraph report](#711-tracegraph-report)
+   - [tracegraph scenario](#712-tracegraph-scenario)
+   - [tracegraph import xdebug](#713-tracegraph-import-xdebug)
+   - [tracegraph coverage](#714-tracegraph-coverage)
+   - [tracegraph pack](#715-tracegraph-pack)
+   - [tracegraph schema](#716-tracegraph-schema)
+   - [tracegraph clean & storage](#717-tracegraph-clean--storage-status)
 8. [Baseline, Compare & Findings Workflow](#8-baseline-compare--findings-workflow)
 9. [Security & Reliability Findings](#9-security--reliability-findings)
 10. [Scenario Runner](#10-scenario-runner)
@@ -320,7 +324,38 @@ Auto-discovered by Laravel — no manual registration in `config/app.php`.
 
 ## 4. Quick Start
 
-### 4.1 JavaScript / TypeScript (5 minutes)
+### 4.1 Zero-Config Demo (30 seconds)
+
+No existing project needed. Run one command to create a demo Express app, trace it, and open
+the graph viewer — all offline after install:
+
+```bash
+tracegraph quick
+```
+
+This creates a minimal Express + Vitest invoice API in a temp directory, runs `npm install`,
+traces the test suite, creates baselines, and opens the HTML viewer. Perfect for evaluating
+TraceGraph before adding it to your own code.
+
+```
+→ Preparing demo project...
+→ Running test suite with TraceGraph...
+  ✓ GET /invoices       [12 events captured]
+  ✓ POST /invoices      [18 events captured]  ← auth check traced
+→ Creating baselines...
+→ Opening trace viewer...
+✅ Demo complete! The project is at /tmp/tracegraph-demo-1234/
+
+Try it: remove requireAuth from the invoice route, then run:
+  cd /tmp/tracegraph-demo-1234/
+  tracegraph run -- npx vitest run && tracegraph compare
+```
+
+See [§7.1 tracegraph quick](#71-tracegraph-quick) for full options.
+
+---
+
+### 4.2 JavaScript / TypeScript (5 minutes)
 
 ```bash
 # 1. Install
@@ -364,7 +399,7 @@ npm run trace:compare
 # → Report shows any behaviour regressions
 ```
 
-### 4.2 PHP / Laravel (5 minutes)
+### 4.3 PHP / Laravel (5 minutes)
 
 ```bash
 # 1. Install
@@ -483,7 +518,76 @@ a `console.warn` and a `captureLevel.recommendation` explaining why some events 
 
 ---
 
-### 6.2 `traceFunction` & `traceMethod`
+### 6.2 Server Mode (per-request tracing)
+
+Use server mode when your application is a **long-lived dev server** rather than a test suite.
+Instead of one trace per process lifetime, each HTTP request produces its own `.trace.json` — 
+the VS Code sidebar auto-refreshes as you use the app.
+
+**Setup (one line change):**
+
+```bash
+# Start your dev server with per-request tracing
+tracegraph run --server-mode -- pnpm dev
+# or, from the Express TypeScript sample project:
+pnpm trace:dev    # runs: tracegraph run --server-mode -- pnpm dev
+```
+
+**Express middleware** — no code change needed. `traceExpress()` auto-detects
+`TRACEGRAPH_SERVER_MODE=1` (set by the CLI) and switches to per-request mode:
+
+```typescript
+// Existing code — no change needed
+app.use(traceExpress());
+// When TRACEGRAPH_SERVER_MODE=1: one trace per request, finalised on res.on('finish')
+// When not set:                  one trace for the whole process (original behaviour)
+```
+
+You can also set it explicitly in code if you want server mode regardless of the CLI flag:
+
+```typescript
+app.use(traceExpress({
+  mode: 'server',
+
+  // Optional: reduce trace volume in busy dev environments
+  sampling: {
+    rate:            0.5,      // trace 50% of requests
+    statusCodes:     [4, 5],   // or: only trace 4xx/5xx errors
+    onDemandHeader:  'x-trace-me',  // or: only trace requests with this header = "1"
+  },
+}));
+```
+
+**What happens per request:**
+
+```
+curl POST /invoices
+  │
+  ├── Events written to  .tracegraph/runs/<runId>/<requestTraceId>.events.jsonl.tmp
+  │
+  └── res.on('finish') fires:
+        → finaliseTrace() → atomic rename → .tracegraph/traces/<requestTraceId>.trace.json
+        → stdout: {"type":"trace.completed","traceId":"...","payload":{"file":"..."}}
+        → VS Code FileWatcher detects new .trace.json → sidebar refreshes
+        → VS Code offers to create a baseline if none exists
+```
+
+**Sampling options (all optional):**
+
+| Option | Description |
+|--------|-------------|
+| `rate: 0.5` | Probabilistic — traces 50% of requests at random |
+| `statusCodes: [4, 5]` | Only trace requests where status code starts with 4 or 5 |
+| `onDemandHeader: 'x-trace-me'` | Only trace requests carrying `x-trace-me: 1` header |
+
+Sampling options are combinable (all conditions must pass).
+
+**`TRACEGRAPH_SERVER_MODE` is set automatically** by `tracegraph run --server-mode`. You do
+not need to set it manually — the middleware reads it from the environment.
+
+---
+
+### 6.3 `traceFunction` & `traceMethod`
 
 Manually wrap any function or class method to emit `function_call` events. This is Level 2
 instrumentation — it adds your critical business logic to the trace without requiring any
@@ -536,7 +640,7 @@ class InvoiceService {
 
 ---
 
-### 6.3 Outbound HTTP Tracking
+### 6.4 Outbound HTTP Tracking
 
 TraceGraph provides three mechanisms for capturing outbound HTTP calls, depending on how your
 application makes them:
@@ -587,7 +691,7 @@ traceAxios(client);  // attaches request + response interceptors
 
 ---
 
-### 6.4 Vitest Reporter
+### 6.5 Vitest Reporter
 
 The Vitest reporter gives you **Level 5 tracing**: one isolated `.trace.json` file per test case,
 with the full test lifecycle captured.
@@ -648,7 +752,7 @@ This gives you runtime-level regression tests that go beyond what static asserti
 
 ---
 
-### 6.5 Jest Reporter
+### 6.6 Jest Reporter
 
 The Jest reporter works identically to the Vitest reporter — one trace file per test case.
 
@@ -680,7 +784,7 @@ module.exports = {
 
 ---
 
-### 6.6 Laravel (PHP)
+### 6.7 Laravel (PHP)
 
 The Laravel adapter auto-discovers via Composer's package discovery mechanism and hooks into
 every layer of the framework.
@@ -761,7 +865,7 @@ php artisan tracegraph:open --file <f> # Open a specific trace file
 
 ---
 
-### 6.7 PHPUnit Extension
+### 6.8 PHPUnit Extension
 
 For per-test trace files in PHPUnit (10/11), register the extension in `phpunit.xml`:
 
@@ -795,7 +899,7 @@ and can be opened, compared, and baselined individually.
 
 ---
 
-### 6.8 Xdebug Integration
+### 6.9 Xdebug Integration
 
 Xdebug enrichment adds deep PHP function-call detail to Laravel semantic traces. It is entirely
 optional — the semantic trace is fully useful without it.
@@ -851,7 +955,49 @@ showing depth-indented function names with `file:line` and confidence badges.
 
 ## 7. CLI Command Reference
 
-### 7.1 `tracegraph init`
+### 7.1 `tracegraph quick`
+
+Zero-configuration demo. Creates a complete Express + Vitest project in a temp directory,
+runs tracing, creates baselines, and opens the HTML viewer — entirely from inline templates,
+no network required after install.
+
+```
+tracegraph quick [--out-dir <path>]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--out-dir <path>` | System temp dir | Where to create the demo project |
+
+```bash
+# Run the demo (creates project in /tmp/tracegraph-demo-<timestamp>/)
+tracegraph quick
+
+# Use a specific directory
+tracegraph quick --out-dir ~/projects/tracegraph-demo
+```
+
+**What it creates:**
+
+```
+tracegraph-demo/
+├── src/
+│   ├── app.ts          ← Express app with traceExpress()
+│   └── routes/
+│       └── invoices.ts ← CRUD routes with auth guard (try removing it!)
+├── __tests__/
+│   └── invoices.test.ts ← Vitest tests with supertest
+├── package.json
+└── tracegraph.config.json
+```
+
+The demo intentionally includes a `requireAuth` guard on `POST /invoices` and
+`DELETE /invoices/:id`. After running the demo, try removing `requireAuth` from one route
+and running `tracegraph compare` — TraceGraph will report a Critical finding.
+
+---
+
+### 7.2 `tracegraph init`
 
 One-command project setup. Run once per project.
 
@@ -861,9 +1007,10 @@ tracegraph init
 
 **What it does:**
 
-1. Detects your package manager (`pnpm` / `yarn` / `bun` / `npm`)
-2. Detects your test runner (`vitest` / `jest` / `mocha`)
-3. Adds four scripts to `package.json`:
+1. **Runs pre-flight environment checks** (see below)
+2. Detects your package manager (`pnpm` / `yarn` / `bun` / `npm`)
+3. Detects your test runner (`vitest` / `jest` / `mocha`)
+4. Adds four scripts to `package.json`:
 
    | Script | Command |
    |--------|---------|
@@ -872,8 +1019,8 @@ tracegraph init
    | `trace:compare` | `tracegraph compare` |
    | `trace:report` | `tracegraph open --html .tracegraph/reports/latest.report.json` |
 
-4. Creates `tracegraph.config.json` with detected language/framework
-5. Appends to `.gitignore`:
+5. Creates `tracegraph.config.json` with detected language/framework
+6. Appends to `.gitignore`:
    ```
    .tracegraph/runs/
    .tracegraph/traces/
@@ -881,15 +1028,115 @@ tracegraph init
    .tracegraph/index.json
    ```
 
+**Pre-flight environment checks:**
+
+`tracegraph init` runs a short environment scan before setup and shows a ✓/✗ per item:
+
+```
+Checking your environment...
+
+  ✓  Node.js       22.22.3
+  ✓  pnpm          9.15.0
+  ✓  PHP           8.3.4       (composer.json detected)
+  ✗  Xdebug        not found
+        → PHP traces will be capture level 1 only.
+          Install: pecl install xdebug (https://xdebug.org)
+  ✓  Git           2.44.0
+```
+
+Checks are **non-blocking** — init continues even when something is missing, but the hints
+explain what you'd gain by installing it. Results are saved to `.tracegraph/environment.json`
+so `tracegraph diagnose` can compare across runs.
+
+Languages checked based on presence of config files:
+- **PHP + Xdebug** — when `composer.json` exists
+- **Python** — when `requirements.txt` or `pyproject.toml` exists
+- **Java** — when `pom.xml` or `build.gradle` exists
+
 ---
 
-### 7.2 `tracegraph run`
+### 7.3 `tracegraph adopt`
+
+Baseline adoption for **existing codebases**. When you add TraceGraph to a project that
+already has behaviour, `adopt` treats the current state as the approved baseline and produces
+a written record of what was adopted.
+
+Without `adopt`, the first `tracegraph compare` on an existing project floods you with findings
+for every existing behaviour pattern. `adopt` says "this is the starting line."
+
+```
+tracegraph adopt [--dry-run] [--reason <text>] [--approved-by <name>]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--dry-run` | `false` | Show what would be adopted without writing anything |
+| `--reason <text>` | `"Adopted as existing baseline behaviour"` | Recorded in `BASELINE_ASSUMPTIONS.md` |
+| `--approved-by <name>` | `$USER` | Person authorising the adoption |
+
+```bash
+# Typical first-run on an existing project
+tracegraph run -- npm test                    # capture your first traces
+tracegraph adopt --reason "Initial adoption, all existing patterns approved"
+# → Baselines created for all traces from the latest run
+# → All findings approved by fingerprint
+# → .tracegraph/BASELINE_ASSUMPTIONS.md written
+
+# Preview before committing
+tracegraph adopt --dry-run
+```
+
+**What it produces:**
+
+```
+[tracegraph] Analysing 8 trace(s) for adoption...
+
+  Found 3 finding(s) across 8 trace(s):
+
+  🔴 CRITICAL (1)
+    • Authorization check removed from POST /invoices
+      rule: security.authorization.middleware_removed
+
+  🟡 MEDIUM (2)
+    • N+1 query detected (7 repetitions) — GET /orders
+      rule: reliability.n_plus_one_query
+    • Missing transaction boundary — POST /checkout
+      rule: reliability.missing_transaction
+
+[tracegraph] Creating baselines for 8 trace(s)...
+[tracegraph] ✅ Adoption complete.
+  Baselines created:   8
+  Findings suppressed: 3
+  See: .tracegraph/BASELINE_ASSUMPTIONS.md
+```
+
+**`BASELINE_ASSUMPTIONS.md`** is written to `.tracegraph/` and documents every finding
+that existed at adoption time. Commit this alongside the baselines so code reviewers know
+what was knowingly accepted.
+
+**Important:** Findings are approved by **fingerprint** (not by rule). If the same pattern
+appears in a new location after adoption (new route, new table), TraceGraph will still fire
+the finding for that new instance.
+
+---
+
+### 7.4 `tracegraph run`
 
 Wraps any shell command with tracing. The most frequently used command.
 
 ```
 tracegraph run -- <command> [args...]
 ```
+
+```
+tracegraph run [--server-mode] [--run-id <id>] [--scenario-id <id>] -- <command> [args...]
+```
+
+| Flag | Description |
+|------|-------------|
+| `--server-mode` | Keep child process alive; write one `.trace.json` per HTTP request instead of one per process |
+| `--run-id <id>` | Override the generated run ID |
+| `--scenario-id <id>` | Tag this run with a scenario/PR correlation ID |
 
 **Environment variables injected into the child process:**
 
@@ -898,6 +1145,8 @@ tracegraph run -- <command> [args...]
 | `TRACEGRAPH_ENABLED` | `1` | Activates all language adapters |
 | `TRACEGRAPH_RUN_DIR` | `.tracegraph/runs/<runId>/` | Directory for live event streams |
 | `TRACEGRAPH_TRACE_ID` | `trace_<hex16>` | Trace ID for the current run |
+| `TRACEGRAPH_WORKSPACE_ROOT` | project root | Used by server mode to locate the traces directory |
+| `TRACEGRAPH_SERVER_MODE` | `1` (when `--server-mode` is passed) | Switches `traceExpress()` to per-request mode |
 | `NODE_OPTIONS` | `--import .../register` or `--require .../register-cjs` | Auto-instrumentation hook (JS only) |
 
 **Examples:**
@@ -920,6 +1169,12 @@ TRACEGRAPH_ENABLED=1 tracegraph run -- php artisan test
 
 # Pass extra flags to the wrapped command
 tracegraph run -- npx vitest run --reporter=verbose
+
+# Server mode — long-lived dev server, one trace per HTTP request
+tracegraph run --server-mode -- pnpm dev
+# → "server-mode: starting pnpm dev"
+# → "each HTTP request will produce a separate .trace.json"
+# → press Ctrl-C to stop; sends SIGTERM to child, waits 5s for in-flight requests
 ```
 
 **stdout protocol** (JSONL lines, consumed by VS Code extension and CI tools):
@@ -938,7 +1193,7 @@ is already present in a detected config file.
 
 ---
 
-### 7.3 `tracegraph open`
+### 7.5 `tracegraph open`
 
 Produces a **self-contained offline HTML file** from a `.trace.json` or `.report.json` and
 optionally opens it in your default browser.
@@ -999,7 +1254,7 @@ tracegraph open --html .tracegraph/traces/*.trace.json --no-open --out artifact.
 | 🔴 Red | `authorization_check`, `auth_check`, `error` |
 | 🟣 Purple | `external_http_call` |
 | 🟢 Teal | `queue_event` |
-| ⚫ Grey | `function_call`, `method_call`, `trace_start`, `trace_end` |
+| ⚫ Grey | `function_call`, `method_call` |
 
 **Timeline view** — horizontal Gantt-style bars proportional to each event's `durationMs`,
 showing parallel async branches in separate lanes side-by-side.
@@ -1009,7 +1264,7 @@ event back to the trace root, highlighting only the causal chain and dimming unr
 
 ---
 
-### 7.4 `tracegraph diagnose`
+### 7.6 `tracegraph diagnose`
 
 Reads the latest (or specified) trace and prints a human-readable capture report with ranked
 recommendations for reaching a higher capture level.
@@ -1053,7 +1308,7 @@ Recommendations:
 
 ---
 
-### 7.5 `tracegraph baseline`
+### 7.7 `tracegraph baseline`
 
 Manages baselines — the stored "known-good" behaviour snapshots that define expected behaviour.
 
@@ -1117,7 +1372,7 @@ tracegraph baseline approve "POST /invoices" \
 
 ---
 
-### 7.6 `tracegraph compare`
+### 7.8 `tracegraph compare`
 
 Compares candidate traces against stored baselines and produces a `TraceReport` JSON file.
 
@@ -1188,7 +1443,7 @@ For each (baseline, candidate) pair matched by testId:
 
 ---
 
-### 7.7 `tracegraph finding`
+### 7.9 `tracegraph finding`
 
 Manages findings from the latest report.
 
@@ -1216,8 +1471,9 @@ Findings — 2026-05-29T14:30
 
 #### `finding approve`
 
-Accepts one finding instance. Recorded in `.tracegraph/approvals/findings.json`.
+Approves a finding by fingerprint (single) or by criteria (batch).
 
+**Single approval:**
 ```bash
 tracegraph finding approve a1b2c3d4 \
   --reason "Auth handled by API gateway upstream — confirmed with infra team" \
@@ -1225,11 +1481,59 @@ tracegraph finding approve a1b2c3d4 \
   --expires 2027-01-01
 ```
 
+**Batch approval:**
+```bash
+# Approve all open findings (interactive prompt per finding)
+tracegraph finding approve --all --reason "Bulk approval after infra review"
+
+# Approve all findings matching a rule pattern (glob)
+tracegraph finding approve --rule "reliability.*" --reason "Reliability backlog accepted"
+
+# Approve findings at medium severity and below
+tracegraph finding approve --severity medium --reason "Low-priority findings accepted"
+
+# Preview without writing (dry run)
+tracegraph finding approve --all --dry-run
+```
+
+**Dry-run output:**
+```
+[tracegraph] Dry run — would approve 4 finding(s):
+
+  🟡 a1b2c3d4  N+1 query detected — GET /orders
+  🟡 e5f6a7b8  N+1 query detected — GET /products
+  🔵 c9d0e1f2  Missing transaction boundary — POST /checkout
+  🔵 d3e4f5a6  Duplicate side effect — POST /invoices
+```
+
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--reason` | required | Human-readable approval reason |
+| `--reason` | required (single) / optional (batch uses default) | Human-readable approval reason |
 | `--approved-by` | `$USER` | Approver name |
 | `--expires` | 1 year | ISO date after which approval expires |
+| `--all` | — | Batch: approve all open findings |
+| `--rule <pattern>` | — | Batch: approve findings matching rule ID glob (e.g. `reliability.*`) |
+| `--severity <level>` | — | Batch: approve findings at or below this severity |
+| `--dry-run` | — | Show what would be approved without writing |
+
+#### `finding reject`
+
+Explicitly marks a finding as "needs fix". A rejected finding **always** appears as open in
+future `compare` runs, even if a baseline approval record exists. Use this when you want to
+ensure a specific regression cannot be quietly approved away.
+
+```bash
+tracegraph finding reject a1b2c3d4 \
+  --reason "This auth removal is a real security regression — must be fixed before merge" \
+  --rejected-by alice
+```
+
+```
+[tracegraph] Finding a1b2c3d4 marked as rejected (needs fix).
+  This finding will remain open in all future compare runs.
+```
+
+Rejections are stored in `.tracegraph/rejections/findings.json` (commit this file).
 
 #### `finding suppress`
 
@@ -1277,7 +1581,56 @@ Actions:
 
 ---
 
-### 7.8 `tracegraph report`
+### 7.10 `tracegraph ci-summary`
+
+Reads the latest report and produces a structured CI summary — a single command that handles
+GitHub Actions step summaries, Slack notifications, and structured JSON for downstream tooling.
+
+```
+tracegraph ci-summary [--format text|json|github] [--slack-webhook <url>] [--input <file>]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--format` | `text` | `text` (stdout one-liner) / `json` (machine-readable) / `github` (step summary + outputs) |
+| `--input <file>` | Latest report | Path to a specific `.report.json` |
+| `--slack-webhook <url>` | — | POST summary to a Slack Incoming Webhook |
+
+```bash
+# Human-readable one-liner
+tracegraph ci-summary
+# → ❌  2 open findings (1 critical) — FAIL
+
+# GitHub Actions step summary + step outputs
+tracegraph ci-summary --format github
+# → Writes to $GITHUB_STEP_SUMMARY (markdown table with severity breakdown)
+# → Sets GITHUB_OUTPUT: verdict=fail, open-findings=2, critical-count=1
+
+# Machine-readable JSON
+tracegraph ci-summary --format json
+# → { "verdict": "fail", "openFindings": 2, "criticalCount": 1, ... }
+
+# Slack notification
+tracegraph ci-summary --slack-webhook https://hooks.slack.com/services/...
+```
+
+**Exit codes:**
+- `0` — pass (no open findings)
+- `1` — warn (open findings, none critical)
+- `2` — fail (critical findings present)
+
+**Step output fields** (when `--format github`):
+
+| Output name | Example value |
+|-------------|---------------|
+| `verdict` | `pass` / `warn` / `fail` |
+| `open-findings` | `3` |
+| `critical-count` | `1` |
+| `high-count` | `2` |
+
+---
+
+### 7.11 `tracegraph report`
 
 Renders the latest `.report.json` in human-readable or machine-readable formats.
 
@@ -1316,7 +1669,7 @@ tracegraph report --out docs/security-report.md
 
 ---
 
-### 7.9 `tracegraph scenario`
+### 7.12 `tracegraph scenario`
 
 Run declarative multi-service scenarios. The runner starts servers, executes HTTP steps in
 sequence, injects correlation headers on every request, and writes a `TraceBundle` linking
@@ -1414,7 +1767,7 @@ tracegraph compare --bundle .tracegraph/bundles/create_invoice_run_abc.bundle.js
 
 ---
 
-### 7.10 `tracegraph import xdebug`
+### 7.13 `tracegraph import xdebug`
 
 Parses an Xdebug `.xt` file and converts it to a TraceGraph `.trace.json`. Optionally merges
 with a Laravel semantic trace for full detail.
@@ -1474,7 +1827,7 @@ tracegraph open --html .tracegraph/traces/<traceId>.trace.json
 
 ---
 
-### 7.11 `tracegraph coverage`
+### 7.14 `tracegraph coverage`
 
 Maps functions changed in a git diff to runtime trace events. Produces a gap report showing
 which changed functions were exercised at runtime and which were not.
@@ -1544,7 +1897,7 @@ Output: ChangeCoverageReport
 
 ---
 
-### 7.12 `tracegraph pack`
+### 7.15 `tracegraph pack`
 
 Generates AI context packs from a `TraceReport` and recent traces, writing them to the
 conventional locations where AI tools automatically pick them up.
@@ -1605,7 +1958,7 @@ Each pack contains:
 
 ---
 
-### 7.13 `tracegraph schema`
+### 7.16 `tracegraph schema`
 
 Inspects and migrates TraceGraph artifact schemas to keep old traces and baselines compatible
 across CLI upgrades.
@@ -1653,7 +2006,7 @@ tracegraph baseline migrate
 
 ---
 
-### 7.14 `tracegraph clean` & `storage status`
+### 7.17 `tracegraph clean` & `storage status`
 
 #### `clean`
 
@@ -2108,14 +2461,35 @@ quickly finding "what led to this exception."
 | `TraceGraph: Generate AI Context Packs` | Runs `tracegraph pack --format all` |
 | `TraceGraph: Refresh` | Forces a tree refresh |
 
-### 12.5 VS Code Settings
+### 12.5 Guided Baseline Creation
+
+When a new `.trace.json` appears and no baseline exists for that trace, the extension shows
+an information message:
+
+```
+TraceGraph: No baseline for "trace_a1b2c3d4…". Create one now?
+[Create Baseline]  [Not now]  [Never for this test]
+```
+
+- **Create Baseline** — runs `tracegraph baseline create` immediately in the background
+- **Not now** — dismisses for this trace; will re-ask next time
+- **Never for this test** — adds the trace ID to `.tracegraph/.baseline-skip`; never prompted again for this specific test
+
+This notification fires on every trace, including per-request traces from server mode. It is
+particularly useful when you first add `traceExpress()` to a project — the first request
+immediately prompts you to capture the baseline.
+
+Disable with `"tracegraph.baselineGuidance": false` in settings.
+
+### 12.6 VS Code Settings
 
 ```jsonc
 // settings.json
 {
-  "tracegraph.cliPath":     "",     // path to tracegraph binary; empty = auto-detect
-  "tracegraph.runCommand":  "",     // command for "Run with Tracing"; prompted if empty
-  "tracegraph.autoRefresh": true    // auto-refresh trees on file changes
+  "tracegraph.cliPath":          "",     // path to tracegraph binary; empty = auto-detect
+  "tracegraph.runCommand":       "",     // command for "Run with Tracing"; prompted if empty
+  "tracegraph.autoRefresh":      true,   // auto-refresh trees on file changes
+  "tracegraph.baselineGuidance": true    // show "Create Baseline?" when no baseline exists for a new trace
 }
 ```
 
@@ -2123,7 +2497,82 @@ quickly finding "what led to this exception."
 
 ## 13. CI Integration
 
-### 13.1 GitHub Actions — JavaScript/TypeScript
+### 13.1 GitHub Action (Marketplace)
+
+The official TraceGraph GitHub Action handles setup, caching, tracing, comparison, and
+step summaries in one composite action. It is published to the GitHub Marketplace as
+`tracegraph/tracegraph-action`.
+
+```yaml
+name: TraceGraph Assurance
+on: [push, pull_request]
+
+jobs:
+  trace:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: TraceGraph behaviour analysis
+        uses: tracegraph/tracegraph-action@v1
+        with:
+          command: npm test          # the test command to trace
+          fail-on: critical          # fail step on critical findings (default)
+          upload-report: true        # upload report JSON as artifact (default)
+```
+
+**Inputs:**
+
+| Input | Default | Description |
+|-------|---------|-------------|
+| `command` | required | Test command to trace (`npm test`, `pnpm test`, etc.) |
+| `fail-on` | `critical` | Severity threshold: `critical` / `high` / `medium` / `none` |
+| `upload-report` | `true` | Upload the report JSON as a GitHub Actions artifact |
+| `slack-webhook` | — | Slack Incoming Webhook URL for posting the summary |
+| `team-server-url` | — | Team Server URL to upload results |
+| `token` | — | API token for Team Server (use `${{ secrets.TRACEGRAPH_TOKEN }}`) |
+
+**Outputs** (available as step outputs in subsequent steps):
+
+| Output | Example | Description |
+|--------|---------|-------------|
+| `verdict` | `fail` | `pass` / `warn` / `fail` |
+| `open-findings` | `3` | Total open findings |
+| `critical-count` | `1` | Critical findings count |
+
+**What the action does internally:**
+
+1. Sets up Node.js 20 and caches the CLI install
+2. Restores baselines from cache (keyed by `ref + sha`)
+3. Runs `tracegraph run -- <command>`
+4. Runs `tracegraph compare`
+5. Runs `tracegraph ci-summary --format github` → writes to `$GITHUB_STEP_SUMMARY` + sets step outputs
+6. Uploads the report as an artifact
+7. Saves updated baselines on `main`/default branch pushes
+8. Enforces `fail-on` threshold (exits non-zero when findings exceed the threshold)
+
+**Using step outputs in subsequent steps:**
+
+```yaml
+- name: TraceGraph
+  id: tg
+  uses: tracegraph/tracegraph-action@v1
+  with:
+    command: npm test
+
+- name: Post to Slack (only on fail)
+  if: steps.tg.outputs.verdict == 'fail'
+  run: echo "Critical findings detected"
+```
+
+### 13.2 GitHub Actions — Manual Setup (JavaScript/TypeScript)
+
+If you need more control than the composite action provides:
 
 ```yaml
 name: TraceGraph Assurance
@@ -2154,9 +2603,9 @@ jobs:
       - name: Check AI change coverage
         run: npx tracegraph coverage --base origin/main --head HEAD
 
-      - name: Write GitHub step summary
+      - name: CI summary
         if: always()
-        run: npx tracegraph report --format github-step-summary --out "$GITHUB_STEP_SUMMARY"
+        run: npx tracegraph ci-summary --format github
 
       - name: Upload trace artifacts
         if: always()
@@ -2167,7 +2616,7 @@ jobs:
           retention-days: 14
 ```
 
-### 13.2 GitHub Actions — Laravel / PHP
+### 13.3 GitHub Actions — Laravel / PHP
 
 ```yaml
 name: TraceGraph Assurance (Laravel)
@@ -2211,7 +2660,7 @@ jobs:
         run: tracegraph report --format github-step-summary --out "$GITHUB_STEP_SUMMARY"
 ```
 
-### 13.3 Suppression File Policy
+### 13.4 Suppression File Policy
 
 Any PR that modifies `.tracegraph/suppressions/tracegraph.suppressions.json` automatically
 triggers a `policy.suppressions_modified` finding and exits with code 4:
@@ -2224,18 +2673,22 @@ triggers a `policy.suppressions_modified` finding and exits with code 4:
   # → requires explicit reviewer approval before merge
 ```
 
-### 13.4 What to Commit vs. Gitignore
+### 13.5 What to Commit vs. Gitignore
 
 ```
 .tracegraph/
-  baselines/    ← COMMIT (your source of truth for expected behaviour)
-  approvals/    ← COMMIT (finding approvals with reasons and expiry dates)
-  suppressions/ ← COMMIT (suppression rules — security-sensitive, requires review)
-  scenarios/    ← COMMIT (declarative scenario definitions)
-  runs/         ← GITIGNORE (temporary, large)
-  traces/       ← GITIGNORE (large, regenerated every run)
-  reports/      ← GITIGNORE (generated output)
-  index.json    ← GITIGNORE
+  baselines/               ← COMMIT (your source of truth for expected behaviour)
+  approvals/               ← COMMIT (finding approvals with reasons and expiry dates)
+  suppressions/            ← COMMIT (suppression rules — security-sensitive, requires review)
+  rejections/              ← COMMIT (explicit "needs fix" records — override approvals)
+  scenarios/               ← COMMIT (declarative scenario definitions)
+  BASELINE_ASSUMPTIONS.md  ← COMMIT (written by tracegraph adopt — documents what was accepted)
+  environment.json         ← COMMIT (written by tracegraph init — records environment snapshot)
+  runs/                    ← GITIGNORE (temporary, large)
+  traces/                  ← GITIGNORE (large, regenerated every run)
+  reports/                 ← GITIGNORE (generated output)
+  index.json               ← GITIGNORE
+  .baseline-skip           ← GITIGNORE (VS Code "Never for this test" list)
 ```
 
 ---
@@ -2274,6 +2727,12 @@ npx tracegraph baseline create --reason "Initial baseline"
 pnpm run trace:test
 npx tracegraph compare
 # → High: validation-like event removed from POST /invoices
+
+# Server mode — trace every live request against the dev server
+pnpm trace:dev
+# → tracegraph run --server-mode -- pnpm dev
+# → curl POST http://localhost:3000/invoices → trace appears in VS Code sidebar instantly
+# → Ctrl-C to stop
 ```
 
 **Key tracing code (`src/app.ts`):**
@@ -2448,8 +2907,15 @@ tracegraph open --html .tracegraph/traces/<traceId>.trace.json
     ├── suppressions/             ← COMMIT THESE ← security-sensitive; triggers policy finding on change
     │   └── tracegraph.suppressions.json
     │
-    └── scenarios/                ← COMMIT THESE ← declarative scenario definitions
-        └── *.scenario.json
+    ├── rejections/               ← COMMIT THESE ← explicit "needs fix" records (override approvals)
+    │   └── findings.json
+    │
+    ├── scenarios/                ← COMMIT THESE ← declarative scenario definitions
+    │   └── *.scenario.json
+    │
+    ├── BASELINE_ASSUMPTIONS.md   ← COMMIT ← written by `tracegraph adopt`; documents what was accepted
+    ├── environment.json          ← COMMIT ← written by `tracegraph init`; environment snapshot
+    └── .baseline-skip            ← GITIGNORE ← VS Code "Never for this test" skip list
 ```
 
 **Atomic write protocol** — no file is ever written in-place:
@@ -2656,5 +3122,4 @@ tracegraph finding suppress <fp> \
 
 ---
 
-*TraceGraph is open-source under the MIT licence. The `ee/` directory contains Enterprise Edition
-stubs. All packages in `packages/` are MIT-licensed.*
+*TraceGraph is open-source under the MIT licence. All packages in `packages/` are MIT-licensed.*

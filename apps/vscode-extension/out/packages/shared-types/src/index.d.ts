@@ -29,6 +29,11 @@ export type TraceEntrypoint = {
 } | {
     type: 'cli_command';
     command: string;
+} | {
+    type: 'server';
+    host: string;
+    port: number;
+    startedAt: number;
 };
 /**
  * Levels:
@@ -61,7 +66,7 @@ export type TraceEventType = 'trace_start' | 'trace_end' | 'http_request' | 'htt
  | 'test_run';
 export type ConcurrencyType = 'sequential' | 'parallel' | 'promise_all' | 'race' | 'background';
 export type LanguageId = 'typescript' | 'javascript' | 'php';
-export type FrameworkId = 'express' | 'nestjs' | 'nextjs' | 'fastify' | 'laravel' | 'symfony' | 'vitest' | 'plain';
+export type FrameworkId = 'express' | 'nestjs' | 'nextjs' | 'fastify' | 'laravel' | 'symfony' | 'vitest' | 'jest' | 'xdebug' | 'plain';
 /** Cross-trace event reference for causal links (e.g. HTTP request → dispatched job). */
 export type EventRef = {
     traceId: string;
@@ -368,6 +373,25 @@ export type LatestPointer = {
     latestReportId: string | null;
     /** Unix epoch ms when this file was last written. */
     updatedAt: number;
+};
+/**
+ * Written to `.tracegraph/BASELINE_ASSUMPTIONS.md` (human-readable) and
+ * `.tracegraph/adoption-report.json` (machine-readable) after `tracegraph adopt`.
+ */
+export type AdoptionReport = {
+    adoptedAt: number;
+    adoptedBy: string;
+    tracesAdopted: number;
+    findingsAdopted: {
+        severity: FindingSeverity;
+        ruleId: string;
+        route?: string;
+    }[];
+    findingsSuppressed: {
+        severity: FindingSeverity;
+        ruleId: string;
+        reason: string;
+    }[];
 };
 /**
  * A TraceGraph scenario — a declarative definition of one or more servers to

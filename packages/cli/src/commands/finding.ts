@@ -135,6 +135,10 @@ export type FindingSuppressOptions = {
   approvedBy?:       string;
   expiresAt?:        string;
   requiresEvidence?: string;  // "type:name[,type:name...]"
+  // IMP-3.2: contextual scope fields
+  route?:            string;
+  resource?:         string;
+  file?:             string;
 };
 
 export function findingSuppressCommand(
@@ -172,6 +176,10 @@ export function findingSuppressCommand(
     expiresAt:        options.expiresAt ?? oneYearFromNow(),
     approvedBy:       options.approvedBy ?? process.env['USER'] ?? process.env['USERNAME'] ?? 'system',
     createdAt:        new Date().toISOString(),
+    // IMP-3.2: optional scope fields
+    ...(options.route    ? { route:    options.route }    : {}),
+    ...(options.resource ? { resource: options.resource } : {}),
+    ...(options.file     ? { file:     options.file }     : {}),
   };
 
   const suppressDir  = path.join(tracegraphDir, 'suppressions');
@@ -196,6 +204,166 @@ export function findingSuppressCommand(
       `  requiresEvidence: ${requiresEvidence.map((e) => `${e.type}:${e.name}`).join(', ')}\n`,
     );
   }
+  return EXIT_CODES.SUCCESS;
+}
+
+// ─── finding approve (batch) ──────────────────────────────────────────────────
+
+export type FindingApproveBatchOptions = {
+  all?:         boolean;
+  rule?:        string;   // glob pattern, e.g. "reliability.*"
+  severity?:    FindingSeverity;
+  reason?:      string;
+  approvedBy?:  string;
+  dryRun?:      boolean;
+};
+
+export function findingApproveBatchCommand(options: FindingApproveBatchOptions): number {
+  const cwd           = process.cwd();
+  const tracegraphDir = path.join(cwd, '.tracegraph');
+  const report        = loadReport(undefined, cwd);
+
+  if (!report) {
+    process.stderr.write('[tracegraph] No report found. Run `tracegraph compare` first.\n');
+    return EXIT_CODES.CLI_ERROR;
+  }
+
+  // Filter to open findings matching the batch criteria
+  let targets = report.findings.filter((f) => f.status === 'open');
+
+  if (options.rule) {
+    const pattern = options.rule.replace(/\./g, '\\.').replace(/\*/g, '.*');
+    const re = new RegExp(`^${pattern}$`);
+    targets = targets.filter((f) => re.test(f.ruleId));
+  }
+
+  if (options.severity) {
+    const SEVERITY_RANK: Record<FindingSeverity, number> = { critical: 4, high: 3, medium: 2, low: 1, info: 0 };
+    const threshold = SEVERITY_RANK[options.severity] ?? 0;
+    targets = targets.filter((f) => (SEVERITY_RANK[f.severity] ?? 0) <= threshold);
+  }
+
+  if (targets.length === 0) {
+    process.stdout.write('[tracegraph] No open findings match the given criteria.\n');
+    return EXIT_CODES.SUCCESS;
+  }
+
+  if (options.dryRun) {
+    process.stdout.write(`[tracegraph] Dry run — would approve ${targets.length} finding(s):\n\n`);
+    for (const f of targets) {
+      process.stdout.write(`  ${SEVERITY_EMOJI[f.severity]} ${f.fingerprint}  ${f.title}\n`);
+    }
+    process.stdout.write('\n');
+    return EXIT_CODES.SUCCESS;
+  }
+
+  const approvedBy = options.approvedBy ?? process.env['USER'] ?? process.env['USERNAME'] ?? 'system';
+  const reason     = options.reason ?? 'Batch approval via tracegraph finding approve';
+
+  const approvalDir  = path.join(tracegraphDir, 'approvals');
+  const approvalFile = path.join(approvalDir, 'findings.json');
+  fs.mkdirSync(approvalDir, { recursive: true });
+
+  let existing: FindingApprovalsFile = {
+    schemaVersion: SCHEMA_VERSIONS.findingApproval,
+    approvals:     [],
+  };
+  if (fs.existsSync(approvalFile)) {
+    try {
+      existing = JSON.parse(fs.readFileSync(approvalFile, 'utf8')) as FindingApprovalsFile;
+    } catch { /* use default */ }
+  }
+
+  let added = 0;
+  for (const f of targets) {
+    // Remove any existing approval for this fingerprint before adding
+    existing.approvals = existing.approvals.filter(
+      (a) => a.findingFingerprint !== f.fingerprint,
+    );
+    existing.approvals.push({
+      findingFingerprint: f.fingerprint,
+      ruleId:             f.ruleId,
+      semanticTarget:     {},
+      approvedBy,
+      reason,
+      expiresAt:          oneYearFromNow(),
+      createdAt:          new Date().toISOString(),
+    });
+    added++;
+  }
+
+  fs.writeFileSync(approvalFile, JSON.stringify(existing, null, 2) + '\n', 'utf8');
+  process.stdout.write(`[tracegraph] Approved ${added} finding(s).\n`);
+  return EXIT_CODES.SUCCESS;
+}
+
+// ─── finding reject ───────────────────────────────────────────────────────────
+
+export type FindingRejectOptions = {
+  reason?:     string;
+  rejectedBy?: string;
+};
+
+/**
+ * Explicitly mark a finding as "needs fix".
+ * A rejected finding stays open in `tracegraph compare` output even if a
+ * baseline approval exists — the rejection takes precedence.
+ */
+export function findingRejectCommand(
+  fingerprint: string,
+  options: FindingRejectOptions,
+): number {
+  const cwd           = process.cwd();
+  const tracegraphDir = path.join(cwd, '.tracegraph');
+  const report        = loadReport(undefined, cwd);
+
+  let ruleId = 'unknown';
+  if (report) {
+    const f = report.findings.find((f) => f.fingerprint === fingerprint || f.id === fingerprint);
+    if (f) {
+      ruleId = f.ruleId;
+    } else {
+      process.stderr.write(`[tracegraph] Finding not found in latest report: ${fingerprint}\n`);
+      return EXIT_CODES.CLI_ERROR;
+    }
+  }
+
+  const rejectionsDir  = path.join(tracegraphDir, 'rejections');
+  const rejectionsFile = path.join(rejectionsDir, 'findings.json');
+  fs.mkdirSync(rejectionsDir, { recursive: true });
+
+  type RejectionRecord = {
+    findingFingerprint: string;
+    ruleId:             string;
+    reason:             string;
+    rejectedBy:         string;
+    createdAt:          string;
+  };
+
+  let existing: { rejections: RejectionRecord[] } = { rejections: [] };
+  if (fs.existsSync(rejectionsFile)) {
+    try {
+      existing = JSON.parse(fs.readFileSync(rejectionsFile, 'utf8')) as typeof existing;
+    } catch { /* use default */ }
+  }
+
+  // Replace any existing rejection for this fingerprint
+  existing.rejections = existing.rejections.filter(
+    (r) => r.findingFingerprint !== fingerprint,
+  );
+  existing.rejections.push({
+    findingFingerprint: fingerprint,
+    ruleId,
+    reason:     options.reason ?? 'Rejected as needs-fix',
+    rejectedBy: options.rejectedBy ?? process.env['USER'] ?? process.env['USERNAME'] ?? 'system',
+    createdAt:  new Date().toISOString(),
+  });
+
+  fs.writeFileSync(rejectionsFile, JSON.stringify(existing, null, 2) + '\n', 'utf8');
+  process.stdout.write(
+    `[tracegraph] Finding ${fingerprint} marked as rejected (needs fix).\n` +
+    `  This finding will remain open in all future compare runs.\n`,
+  );
   return EXIT_CODES.SUCCESS;
 }
 

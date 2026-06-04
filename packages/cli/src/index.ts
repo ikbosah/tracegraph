@@ -11,6 +11,7 @@
  */
 
 import { Command } from 'commander';
+import path from 'path';
 import { EXIT_CODES } from '@tracegraph/shared-types';
 import { runCommand }          from './commands/run';
 import { cleanCommand }        from './commands/clean';
@@ -26,7 +27,9 @@ import { compareCommand }      from './commands/compare';
 import {
   findingListCommand,
   findingApproveCommand,
+  findingApproveBatchCommand,
   findingSuppressCommand,
+  findingRejectCommand,
 } from './commands/finding';
 import { findingExplainCommand } from './commands/explain';
 import { reportCommand }       from './commands/report';
@@ -43,6 +46,17 @@ import {
 } from './commands/scenario';
 import { coverageCommand }  from './commands/coverage';
 import { packCommand }      from './commands/pack';
+import { ciSummaryCommand } from './commands/ci-summary';
+import { adoptCommand }     from './commands/adopt';
+import { quickCommand }     from './commands/quick';
+import { replayCommand }    from './commands/replay';
+import {
+  serverInstallCommand,
+  serverStatusCommand,
+  serverStopCommand,
+  serverLogsCommand,
+} from './commands/server';
+import { pullBaselinesFromTeamServer } from './commands/team-server';
 
 // ── Extract the wrapped command (everything after --) ─────────────────────
 const rawArgv     = process.argv.slice(2); // strip 'node' and script path
@@ -63,7 +77,8 @@ program
   .description('Run a command with tracing enabled')
   .option('--run-id <id>',       'Override the generated run ID')
   .option('--scenario-id <id>',  'Tag this run with a scenario/PR correlation ID')
-  .action(async (options: { runId?: string; scenarioId?: string }) => {
+  .option('--server-mode',       'Keep the child process alive (dev server); write one trace per HTTP request')
+  .action(async (options: { runId?: string; scenarioId?: string; serverMode?: boolean }) => {
     const code = await runCommand(wrappedArgs, options);
     process.exit(code);
   });
@@ -123,8 +138,57 @@ program
   .option('--out <file>',         'Output path for the report JSON')
   .option('--latest',             'Compare only traces from the most recent run (reads .tracegraph/latest.json)')
   .option('--fail-on-critical',   'Exit 3 if any critical findings are open')
-  .action((options: { baseline?: string; candidate?: string; bundle?: string; out?: string; latest?: boolean; failOnCritical?: boolean }) => {
-    process.exit(compareCommand(options));
+  .option('--verbose',            'Show remediation snippets for each finding')
+  .option('--upload <url>',       'Upload traces and report to Team Server after comparing')
+  .option('--project-id <id>',    'Project ID on Team Server (default: cwd basename)')
+  .option('--token <token>',      'Bearer token for Team Server (default: $TRACEGRAPH_TOKEN)')
+  .action(async (options: {
+    baseline?: string; candidate?: string; bundle?: string; out?: string;
+    latest?: boolean; failOnCritical?: boolean; verbose?: boolean;
+    upload?: string; projectId?: string; token?: string;
+  }) => {
+    const code = compareCommand(options);
+    if (options.upload) {
+      // Upload after compare completes (non-blocking on result)
+      const { uploadToTeamServer: _upload, createTeamServerRun: _create } =
+        await import('./commands/team-server');
+      const tgDir    = path.join(process.cwd(), '.tracegraph');
+      const tracesDir = path.join(tgDir, 'traces');
+      let latestRunId = 'unknown';
+      try {
+        const latest = JSON.parse(
+          require('fs').readFileSync(path.join(tgDir, 'latest.json'), 'utf8'),
+        ) as { latestRunId: string; latestTraceIds: string[]; latestReportId: string | null };
+        latestRunId = latest.latestRunId;
+        const traceFiles = latest.latestTraceIds.map(
+          (id: string) => path.join(tracesDir, `${id}.trace.json`),
+        ).filter((f: string) => require('fs').existsSync(f));
+        const reportsDir  = path.join(tgDir, 'reports');
+        const reportFiles = require('fs').existsSync(reportsDir)
+          ? require('fs').readdirSync(reportsDir)
+              .filter((f: string) => f.endsWith('.report.json'))
+              .map((f: string) => path.join(reportsDir, f))
+              .sort((a: string, b: string) =>
+                require('fs').statSync(b).mtimeMs - require('fs').statSync(a).mtimeMs)
+          : [];
+        const reportFile = reportFiles[0] as string | undefined;
+        const serverRunId = await _create(
+          { serverUrl: options.upload, projectId: options.projectId, token: options.token },
+          latestRunId,
+        );
+        if (serverRunId) {
+          await _upload(
+            { serverUrl: options.upload!, projectId: options.projectId, token: options.token },
+            serverRunId,
+            traceFiles,
+            reportFile,
+          );
+        }
+      } catch (err) {
+        process.stderr.write(`[tracegraph] Upload failed: ${String(err)}\n`);
+      }
+    }
+    process.exit(code);
   });
 
 // ── tracegraph finding ────────────────────────────────────────────────────
@@ -140,13 +204,54 @@ findingCmd
 
 findingCmd
   .command('approve')
-  .description('Approve a finding by fingerprint')
+  .description('Approve a finding or batch-approve multiple findings')
+  .argument('[fingerprint]', 'Finding fingerprint (16-char hex) — omit for batch mode')
+  .option('--reason <reason>',       'Approval reason')
+  .option('--approved-by <name>',    'Approver name')
+  .option('--expires <ISO-date>',    'Approval expiry date (default: 1 year)')
+  .option('--all',                   'Batch: approve all open findings')
+  .option('--rule <pattern>',        'Batch: approve findings matching rule ID pattern (glob)')
+  .option('--severity <level>',      'Batch: approve findings at or below this severity')
+  .option('--dry-run',               'Show what would be approved without writing changes')
+  .action((fingerprint: string | undefined, options: {
+    reason?:     string;
+    approvedBy?: string;
+    expiresAt?:  string;
+    all?:        boolean;
+    rule?:       string;
+    severity?:   string;
+    dryRun?:     boolean;
+  }) => {
+    // If no fingerprint and batch flags present → batch mode
+    if (!fingerprint || options.all || options.rule || options.severity) {
+      if (!fingerprint && !options.all && !options.rule && !options.severity) {
+        process.stderr.write('[tracegraph] Provide a fingerprint or use --all / --rule / --severity\n');
+        process.exit(EXIT_CODES.CLI_ERROR);
+      }
+      process.exit(findingApproveBatchCommand({
+        all:        options.all,
+        rule:       options.rule ?? (fingerprint && !options.all ? undefined : fingerprint),
+        severity:   options.severity as never,
+        reason:     options.reason,
+        approvedBy: options.approvedBy,
+        dryRun:     options.dryRun,
+      }));
+    }
+    if (!options.reason) {
+      process.stderr.write('[tracegraph] --reason is required\n');
+      process.exit(EXIT_CODES.CLI_ERROR);
+    }
+    process.exit(findingApproveCommand(fingerprint, { reason: options.reason, approvedBy: options.approvedBy, expiresAt: options.expiresAt }));
+  });
+
+findingCmd
+  .command('reject')
+  .description('Mark a finding as "needs fix" — overrides any existing approval')
   .argument('<fingerprint>', 'Finding fingerprint (16-char hex)')
-  .requiredOption('--reason <reason>', 'Approval reason')
-  .option('--approved-by <name>', 'Approver name')
-  .option('--expires <ISO-date>', 'Approval expiry date (default: 1 year)')
-  .action((fingerprint: string, options: { reason: string; approvedBy?: string; expiresAt?: string }) => {
-    process.exit(findingApproveCommand(fingerprint, options));
+  .option('--reason <reason>',    'Rejection reason')
+  .option('--rejected-by <name>', 'Who is rejecting this finding')
+  .action((fingerprint: string, options: { reason?: string; rejectedBy?: string }) => {
+    process.exit(findingRejectCommand(fingerprint, options));
   });
 
 findingCmd
@@ -157,11 +262,17 @@ findingCmd
   .option('--approved-by <name>',             'Approver name')
   .option('--expires <ISO-date>',             'Expiry date')
   .option('--requires-evidence <type:name>',  'Evidence required for suppression to be active')
+  .option('--route <pattern>',                'Scope: suppress only for this route (glob, e.g. "GET /health*")')
+  .option('--resource <name>',                'Scope: suppress only for this DB table or resource')
+  .option('--file <pattern>',                 'Scope: suppress only for files matching this glob (e.g. "src/legacy/**")')
   .action((fingerprint: string, options: {
     reason:            string;
     approvedBy?:       string;
     expiresAt?:        string;
     requiresEvidence?: string;
+    route?:            string;
+    resource?:         string;
+    file?:             string;
   }) => {
     process.exit(findingSuppressCommand(fingerprint, options));
   });
@@ -323,6 +434,118 @@ program
     dryRun?:   boolean;
   }) => {
     process.exit(packCommand(options));
+  });
+
+// ── tracegraph ci-summary ─────────────────────────────────────────────────
+program
+  .command('ci-summary')
+  .description('Print a structured CI summary from the latest report')
+  .option('--format <fmt>',          'Output format: text | json | github (default: text)')
+  .option('--input <file>',          'Path to a specific .report.json file')
+  .option('--slack-webhook <url>',   'Post the summary to a Slack Incoming Webhook URL')
+  .action(async (options: { format?: string; input?: string; slackWebhook?: string }) => {
+    const code = await ciSummaryCommand({
+      format:       options.format as never,
+      input:        options.input,
+      slackWebhook: options.slackWebhook,
+    });
+    process.exit(code);
+  });
+
+// ── tracegraph adopt ──────────────────────────────────────────────────────
+program
+  .command('adopt')
+  .description('Adopt current behaviour as the approved baseline (for existing codebases)')
+  .option('--dry-run',              'Show what would be adopted without writing changes')
+  .option('--reason <reason>',      'Adoption reason recorded in BASELINE_ASSUMPTIONS.md')
+  .option('--approved-by <name>',   'Name of the person authorising the adoption')
+  .action((options: { dryRun?: boolean; reason?: string; approvedBy?: string }) => {
+    process.exit(adoptCommand(options));
+  });
+
+// ── tracegraph quick ──────────────────────────────────────────────────────
+program
+  .command('quick')
+  .description('Zero-config demo: create a sample project, trace it, and open the viewer')
+  .option('--out-dir <path>',       'Directory to create the demo project in (default: system temp)')
+  .action((options: { outDir?: string }) => {
+    process.exit(quickCommand(options));
+  });
+
+// ── tracegraph replay ─────────────────────────────────────────────────────
+program
+  .command('replay')
+  .description('Replay HTTP requests from a trace against a target URL')
+  .argument('<trace-file>', 'Path to a .trace.json file')
+  .option('--base-url <url>',       'Base URL for replayed requests (e.g. http://localhost:3000)')
+  .option('--env <name>',           'Environment name from tracegraph.config.json replay.environments')
+  .option('--dry-run',              'Print the requests that would be sent without executing them')
+  .option('--compare',              'Run `tracegraph compare` automatically after replay')
+  .option('--include-auth',         'Include Authorization/Cookie headers (stripped by default)')
+  .option('--allow-destructive',    'Allow DELETE and PUT requests (skipped by default)')
+  .action(async (traceFile: string, options: {
+    baseUrl?:          string;
+    env?:              string;
+    dryRun?:           boolean;
+    compare?:          boolean;
+    includeAuth?:      boolean;
+    allowDestructive?: boolean;
+  }) => {
+    const code = await replayCommand(traceFile, options);
+    process.exit(code);
+  });
+
+// ── tracegraph server ─────────────────────────────────────────────────────
+const serverCmd = program.command('server').description('Manage the TraceGraph Team Server');
+
+serverCmd
+  .command('install')
+  .description('Install and start the Team Server via Docker Compose')
+  .option('--port <port>',        'HTTP port to bind (default: 3000)')
+  .option('--data-dir <dir>',     'Host path for persistent data (default: ./.tracegraph-server/data)')
+  .action((options: { port?: string; dataDir?: string }) => {
+    process.exit(serverInstallCommand(options));
+  });
+
+serverCmd
+  .command('status')
+  .description('Check whether the Team Server is running and healthy')
+  .option('--url <url>',          'Team Server URL (default: http://localhost:3000)')
+  .action(async (options: { url?: string }) => {
+    process.exit(await serverStatusCommand(options));
+  });
+
+serverCmd
+  .command('stop')
+  .description('Stop the Team Server container')
+  .action(() => {
+    process.exit(serverStopCommand());
+  });
+
+serverCmd
+  .command('logs')
+  .description('Stream Team Server container logs')
+  .option('-f, --follow',         'Follow log output (docker compose logs -f)')
+  .action((options: { follow?: boolean }) => {
+    process.exit(serverLogsCommand(options));
+  });
+
+// ── tracegraph baseline pull ──────────────────────────────────────────────
+// (added to the existing baseline command group, which is defined above as baselineCmd)
+baselineCmd
+  .command('pull')
+  .description('Pull latest baselines from Team Server into .tracegraph/baselines/')
+  .option('--team-server <url>',   'Team Server URL (default: http://localhost:3000)')
+  .option('--project-id <id>',     'Project ID on the Team Server (default: cwd basename)')
+  .option('--token <token>',       'Bearer token (default: $TRACEGRAPH_TOKEN)')
+  .action(async (options: { teamServer?: string; projectId?: string; token?: string }) => {
+    const serverUrl   = options.teamServer ?? 'http://localhost:3000';
+    const baselinesDir = path.join(process.cwd(), '.tracegraph', 'baselines');
+    const count = await pullBaselinesFromTeamServer(
+      { serverUrl, projectId: options.projectId, token: options.token },
+      baselinesDir,
+    );
+    process.exit(count >= 0 ? EXIT_CODES.SUCCESS : EXIT_CODES.CLI_ERROR);
   });
 
 // ── tracegraph clean ──────────────────────────────────────────────────────

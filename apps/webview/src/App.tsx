@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import type { TraceSession, TraceReport } from '@tracegraph/shared-types';
 import { traceSessionToGraph } from '@tracegraph/graph-engine';
 import type { GraphNode } from '@tracegraph/graph-engine';
@@ -27,6 +27,8 @@ export function App({ trace, report, onOpenSource }: AppProps): React.ReactEleme
   const [traceViewMode, setTraceViewMode]       = useState<TraceViewMode>(
     () => ((trace?.events?.length ?? 0) > 150 ? 'timeline' : 'graph'),
   );
+  // IMP-4.3: search state
+  const [searchQuery, setSearchQuery]           = useState('');
 
   // ── Empty state ─────────────────────────────────────────────────────────────
   if (!trace && !report) {
@@ -94,9 +96,13 @@ export function App({ trace, report, onOpenSource }: AppProps): React.ReactEleme
   }
 
   // ── Trace mode ──────────────────────────────────────────────────────────────
-  const graph        = traceSessionToGraph(trace!);
-  const showBanner   = !bannerDismissed;
-  const isLargeTrace = (trace!.events?.length ?? 0) > 150;
+  // Memoised: traceSessionToGraph is O(n) and runs on every render otherwise.
+  const graph = useMemo(() => traceSessionToGraph(trace!), [trace]);
+
+  const showBanner = !bannerDismissed;
+  // Use post-collapse node count — 80 collapsed nodes is genuinely complex;
+  // raw event count (the old threshold) overestimates since siblings are folded.
+  const isLargeTrace = graph.nodes.length > 80;
 
   const entrypointLabel =
     trace!.entrypoint.type === 'http_request'
@@ -138,6 +144,26 @@ export function App({ trace, report, onOpenSource }: AppProps): React.ReactEleme
             </button>
           ))}
         </div>
+
+        {/* IMP-4.3: Search bar — visible in timeline and graph modes */}
+        {(traceViewMode === 'timeline' || traceViewMode === 'graph') && (
+          <div className="search-bar-wrap">
+            <input
+              className="search-bar"
+              type="search"
+              placeholder="Search events…"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.currentTarget.value)}
+              onKeyDown={(e) => { if (e.key === 'Escape') setSearchQuery(''); }}
+              aria-label="Search events"
+            />
+            {searchQuery && (
+              <span className="search-match-count">
+                {countSearchMatches(trace!.events, searchQuery)} matches
+              </span>
+            )}
+          </div>
+        )}
       </header>
 
       {showBanner && (
@@ -155,6 +181,7 @@ export function App({ trace, report, onOpenSource }: AppProps): React.ReactEleme
               graph={graph}
               selectedNodeId={selectedNode?.id ?? null}
               onNodeClick={setSelectedNode}
+              searchQuery={searchQuery}
             />
           </div>
           <div className="detail-panel">
@@ -170,7 +197,7 @@ export function App({ trace, report, onOpenSource }: AppProps): React.ReactEleme
       {/* ── Timeline mode ────────────────────────────────────────────────── */}
       {traceViewMode === 'timeline' && (
         <div className="main main-full">
-          <TimelineView trace={trace!} onOpenSource={onOpenSource} />
+          <TimelineView trace={trace!} onOpenSource={onOpenSource} searchQuery={searchQuery} />
         </div>
       )}
 
@@ -182,6 +209,27 @@ export function App({ trace, report, onOpenSource }: AppProps): React.ReactEleme
       )}
     </div>
   );
+}
+
+// ─── Search helpers ───────────────────────────────────────────────────────────
+
+import type { TraceEvent } from '@tracegraph/shared-types';
+
+function eventMatchesSearch(event: TraceEvent, query: string): boolean {
+  const q = query.toLowerCase();
+  return (
+    event.name.toLowerCase().includes(q) ||
+    event.type.toLowerCase().includes(q) ||
+    (event.displayName ?? '').toLowerCase().includes(q) ||
+    (event.file ?? '').toLowerCase().includes(q) ||
+    (event.functionName ?? '').toLowerCase().includes(q) ||
+    (event.className ?? '').toLowerCase().includes(q)
+  );
+}
+
+function countSearchMatches(events: TraceEvent[], query: string): number {
+  if (!query) return 0;
+  return events.filter((e) => eventMatchesSearch(e, query)).length;
 }
 
 // ─── DiffTable ────────────────────────────────────────────────────────────────

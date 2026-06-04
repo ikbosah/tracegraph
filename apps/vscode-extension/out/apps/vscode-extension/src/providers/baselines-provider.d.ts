@@ -3,6 +3,9 @@
  *
  * Lists `.baseline.json` files in `.tracegraph/baselines/`.
  * Shows baseline ID (truncated), test name / entrypoint, and approval status.
+ *
+ * Monorepo support:
+ *   Accepts an array of roots and aggregates baselines from every root.
  */
 import * as vscode from 'vscode';
 export declare class BaselineItem extends vscode.TreeItem {
@@ -10,10 +13,11 @@ export declare class BaselineItem extends vscode.TreeItem {
     constructor(baselineFile: string, label: string, description: string, approved: boolean);
 }
 export declare class BaselinesProvider implements vscode.TreeDataProvider<BaselineItem> {
-    private readonly workspaceRoot;
+    private roots;
     private readonly _onDidChangeTreeData;
     readonly onDidChangeTreeData: vscode.Event<BaselineItem | undefined | void>;
-    constructor(workspaceRoot: string);
+    constructor(roots: string[]);
+    setRoots(roots: string[]): void;
     refresh(): void;
     getTreeItem(element: BaselineItem): vscode.TreeItem;
     getChildren(): vscode.ProviderResult<BaselineItem[]>;

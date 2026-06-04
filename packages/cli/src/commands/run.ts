@@ -1,4 +1,4 @@
-import { spawnSync } from 'child_process';
+import { spawnSync, spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import {
@@ -172,8 +172,9 @@ function extractConfigArg(args: string[]): string | undefined {
 }
 
 export type RunOptions = {
-  runId?: string;
+  runId?:      string;
   scenarioId?: string;
+  serverMode?: boolean;
 };
 
 /**
@@ -260,39 +261,47 @@ export async function runCommand(
   // Environment variables communicated to the instrumented child process.
   const childEnv: Record<string, string> = {
     ...process.env as Record<string, string>,
-    TRACEGRAPH_ENABLED:    '1',
-    TRACEGRAPH_RUN_DIR:    runDir,
-    TRACEGRAPH_TRACE_ID:   traceId,
-    TRACEGRAPH_RUN_ID:     runId,
-    TRACEGRAPH_SESSION_ID: sessionId,
+    TRACEGRAPH_ENABLED:       '1',
+    TRACEGRAPH_RUN_DIR:       runDir,
+    TRACEGRAPH_TRACE_ID:      traceId,
+    TRACEGRAPH_RUN_ID:        runId,
+    TRACEGRAPH_SESSION_ID:    sessionId,
     TRACEGRAPH_ROOT_EVENT_ID: traceStartEventId,
+    TRACEGRAPH_WORKSPACE_ROOT: workspaceRoot,
+    ...(options.serverMode ? { TRACEGRAPH_SERVER_MODE: '1' } : {}),
   };
 
-  try {
-    if (!command) {
-      spawnErrorMsg = 'No command provided';
-      exitCode = EXIT_CODES.CLI_ERROR;
-    } else {
-      const result = spawnSync(command, commandArgs, {
-        stdio: 'inherit',  // pass through so the user sees the command's output
-        shell: false,
-        env:   childEnv,
-      });
-
-      if (result.error) {
-        spawnErrorMsg = result.error.message;
-        // ENOENT means the command was not found
-        exitCode = result.error.message.includes('ENOENT')
-          ? EXIT_CODES.CLI_ERROR
-          : EXIT_CODES.COMMAND_FAILURE;
+  if (options.serverMode) {
+    // ── Server mode: long-lived process, per-request trace finalisation ─────
+    exitCode = await runServerMode(command ?? '', commandArgs, childEnv, runId);
+  } else {
+    // ── Normal mode: wait for child to exit, then finalise ──────────────────
+    try {
+      if (!command) {
+        spawnErrorMsg = 'No command provided';
+        exitCode = EXIT_CODES.CLI_ERROR;
       } else {
-        exitCode = result.status ?? EXIT_CODES.SUCCESS;
+        const result = spawnSync(command, commandArgs, {
+          stdio: 'inherit',  // pass through so the user sees the command's output
+          shell: false,
+          env:   childEnv,
+        });
+
+        if (result.error) {
+          spawnErrorMsg = result.error.message;
+          // ENOENT means the command was not found
+          exitCode = result.error.message.includes('ENOENT')
+            ? EXIT_CODES.CLI_ERROR
+            : EXIT_CODES.COMMAND_FAILURE;
+        } else {
+          exitCode = result.status ?? EXIT_CODES.SUCCESS;
+        }
       }
+    } catch (err) {
+      spawnErrorMsg = err instanceof Error ? err.message : String(err);
+      exitCode = EXIT_CODES.CLI_ERROR;
+      emitError(runId, 'Failed to spawn command', spawnErrorMsg);
     }
-  } catch (err) {
-    spawnErrorMsg = err instanceof Error ? err.message : String(err);
-    exitCode = EXIT_CODES.CLI_ERROR;
-    emitError(runId, 'Failed to spawn command', spawnErrorMsg);
   }
 
   const endedAt = Date.now();
@@ -485,4 +494,87 @@ export async function runCommand(
   });
 
   return exitCode;
+}
+
+// ─── Server-mode execution ────────────────────────────────────────────────────
+
+/**
+ * Spawn the wrapped command as a long-lived async process (server mode).
+ *
+ * Unlike the normal mode which uses spawnSync and blocks until exit, this:
+ *  - Uses spawn() so the process keeps running
+ *  - Passes the child's stdout directly to our stdout so per-request
+ *    trace.completed envelopes emitted by RequestEventBuffer reach VS Code
+ *  - Handles SIGINT/SIGTERM: sends SIGTERM to the child, waits up to 5s for
+ *    graceful shutdown, then exits
+ *
+ * Returns a promise that resolves with the child's exit code.
+ */
+function runServerMode(
+  command:  string,
+  args:     string[],
+  env:      Record<string, string>,
+  runId:    string,
+): Promise<number> {
+  if (!command) {
+    process.stderr.write('[tracegraph] server-mode: no command provided\n');
+    return Promise.resolve(EXIT_CODES.CLI_ERROR);
+  }
+
+  return new Promise((resolve) => {
+    process.stderr.write(
+      `[tracegraph] server-mode: starting "${command} ${args.join(' ')}"\n` +
+      `[tracegraph] server-mode: each HTTP request will produce a separate .trace.json\n` +
+      `[tracegraph] server-mode: press Ctrl-C to stop\n`,
+    );
+
+    const child = spawn(command, args, {
+      stdio: ['inherit', 'pipe', 'inherit'],
+      shell: false,
+      env,
+    });
+
+    // Relay child stdout to our stdout so per-request trace.completed envelopes
+    // reach any parent process (VS Code extension, CI) that parses our stdout.
+    child.stdout?.on('data', (chunk: Buffer) => {
+      process.stdout.write(chunk);
+    });
+
+    child.on('error', (err) => {
+      emitError(runId, 'server-mode: failed to spawn command', err.message);
+      resolve(EXIT_CODES.CLI_ERROR);
+    });
+
+    child.on('close', (code) => {
+      process.stderr.write(`[tracegraph] server-mode: child exited (code ${code ?? '?'})\n`);
+      resolve(code ?? EXIT_CODES.SUCCESS);
+    });
+
+    // ── Graceful shutdown on SIGINT / SIGTERM ──────────────────────────────
+    const shutdown = (signal: NodeJS.Signals): void => {
+      process.stderr.write(`\n[tracegraph] server-mode: received ${signal}, stopping server...\n`);
+
+      if (child.exitCode !== null) {
+        // Already exited
+        resolve(child.exitCode);
+        return;
+      }
+
+      child.kill('SIGTERM');
+
+      // Wait up to 5 s for graceful drain of in-flight request buffers
+      const timeout = setTimeout(() => {
+        process.stderr.write('[tracegraph] server-mode: force-killing after 5s\n');
+        child.kill('SIGKILL');
+      }, 5000);
+
+      child.once('close', (code) => {
+        clearTimeout(timeout);
+        resolve(code ?? EXIT_CODES.SUCCESS);
+      });
+    };
+
+    process.once('SIGINT',  () => shutdown('SIGINT'));
+    process.once('SIGTERM', () => shutdown('SIGTERM'));
+  });
 }

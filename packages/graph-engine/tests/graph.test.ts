@@ -34,7 +34,7 @@ function makeSession(events: TraceEvent[]): TraceSession {
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 describe('traceSessionToGraph()', () => {
-  it('produces a node per event', () => {
+  it('produces a node per semantic event (strips trace_start/trace_end bookkeeping nodes)', () => {
     const session = makeSession([
       makeEvent({ eventId: 'evt_1', type: 'trace_start' }),
       makeEvent({ eventId: 'evt_2', type: 'http_request', parentEventId: 'evt_1' }),
@@ -44,8 +44,10 @@ describe('traceSessionToGraph()', () => {
 
     const { nodes, edges } = traceSessionToGraph(session);
 
-    expect(nodes).toHaveLength(4);
-    expect(edges).toHaveLength(3);
+    // trace_start and trace_end are stripped by stripBookkeepingNodes() —
+    // they are internal lifecycle markers with no semantic value in the graph.
+    expect(nodes).toHaveLength(2);  // http_request + http_response
+    expect(edges).toHaveLength(1);  // http_request → http_response
   });
 
   it('assigns correct colours to node types', () => {

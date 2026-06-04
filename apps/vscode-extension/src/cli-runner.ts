@@ -157,50 +157,52 @@ export class CliRunner {
     if (!line.startsWith('{')) return; // ignore non-JSON lines (human-readable stderr)
     try {
       const envelope = JSON.parse(line) as Record<string, unknown>;
-      if (envelope.protocol !== 'tracegraph.cli.v1') return;
+      if (envelope['protocol'] !== 'tracegraph.cli.v1') return;
 
-      const event = envelope.event as Record<string, unknown> | undefined;
-      if (!event) return;
+      // The CLI emits a flat envelope: { protocol, type, runId, traceId, payload, ... }
+      // `payload` is a nested object carrying event-specific fields like `file` and `status`.
+      const eventType = envelope['type'] as string | undefined;
+      const payload   = (envelope['payload'] ?? {}) as Record<string, unknown>;
 
-      switch (event.type) {
+      switch (eventType) {
         case 'trace.completed':
           this._onEvent.fire({
             type:    'trace.completed',
-            traceId: String(event.traceId ?? ''),
-            file:    String(event.file    ?? ''),
-            status:  String(event.status  ?? 'unknown'),
+            traceId: String(envelope['traceId'] ?? ''),
+            file:    String(payload['file']      ?? ''),
+            status:  String(payload['status']    ?? 'unknown'),
           });
           break;
 
         case 'run.completed':
           this._onEvent.fire({
             type:   'run.completed',
-            runId:  String(event.runId  ?? ''),
-            traces: Number(event.traces ?? 0),
+            runId:  String(envelope['runId']  ?? ''),
+            traces: Number(payload['traces']  ?? 0),
           });
           break;
 
         case 'report.created':
           this._onEvent.fire({
             type:   'report.created',
-            file:   String(event.file   ?? ''),
-            runId:  event.runId != null ? String(event.runId) : undefined,
+            file:   String(payload['file'] ?? envelope['file'] ?? ''),
+            runId:  envelope['runId'] != null ? String(envelope['runId']) : undefined,
           });
           break;
 
         case 'bundle.created':
           this._onEvent.fire({
             type:   'bundle.created',
-            file:   String(event.file   ?? ''),
-            runId:  event.runId != null ? String(event.runId) : undefined,
+            file:   String(payload['file'] ?? envelope['file'] ?? ''),
+            runId:  envelope['runId'] != null ? String(envelope['runId']) : undefined,
           });
           break;
 
         case 'error':
           this._onEvent.fire({
             type:    'error',
-            message: String(event.message ?? 'Unknown CLI error'),
-            code:    event.code != null ? Number(event.code) : undefined,
+            message: String(payload['message'] ?? envelope['message'] ?? 'Unknown CLI error'),
+            code:    payload['code'] != null ? Number(payload['code']) : undefined,
           });
           break;
       }

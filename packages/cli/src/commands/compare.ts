@@ -29,19 +29,22 @@ import type {
 import { diffBaseline, diffToFindings, evaluateFindings, analyseTraceFindings } from '@tracegraph/graph-engine';
 import { findBaselineForSession } from './baseline';
 import { emit } from '../protocol';
+import type { TracegraphConfig } from '@tracegraph/shared-types';
 
 export type CompareOptions = {
-  baseline?:      string;
-  candidate?:     string;
+  baseline?:       string;
+  candidate?:      string;
   /**
    * Path to a TraceBundle JSON file.  When supplied, all traces listed in the
    * bundle are loaded and compared instead of using --candidate or latest.json.
    */
-  bundle?:        string;
-  out?:           string;
+  bundle?:         string;
+  out?:            string;
   failOnCritical?: boolean;
   /** Use traces from the most recent run recorded in .tracegraph/latest.json. */
-  latest?:        boolean;
+  latest?:         boolean;
+  /** IMP-3.3: Print remediation snippets below each open finding. */
+  verbose?:        boolean;
 };
 
 export function compareCommand(options: CompareOptions): number {
@@ -50,6 +53,9 @@ export function compareCommand(options: CompareOptions): number {
   const baselinesDir  = options.baseline
     ? path.resolve(cwd, options.baseline)
     : path.join(tracegraphDir, 'baselines');
+
+  // IMP-3.1: Load tracegraph.config.json for rule configuration overrides
+  const ruleConfig = loadTracegraphConfig(cwd);
 
   // ── Resolve candidate trace files ────────────────────────────────────────
   const candidateFiles = options.bundle
@@ -105,10 +111,10 @@ export function compareCommand(options: CompareOptions): number {
     const diff = diffBaseline(baseline, session);
     diffs.push(diff);
 
-    // Generate findings: diff-based (M2) + trace-level analysis (M5)
+    // Generate findings: diff-based (M2) + trace-level analysis (M5 + IMP-3.1 rule config)
     const rawFindings = [
       ...diffToFindings(diff),
-      ...analyseTraceFindings(session),
+      ...analyseTraceFindings(session, ruleConfig?.rules),
     ];
 
     // Evaluate (apply suppressions + approvals)
@@ -176,7 +182,9 @@ export function compareCommand(options: CompareOptions): number {
 
   process.stdout.write(`[tracegraph] Report: ${path.relative(cwd, outPath)}\n`);
 
-  const openCount = allEvaluated.filter((f) => f.status === 'open').length;
+  const openCount    = allEvaluated.filter((f) => f.status === 'open').length;
+  const openFindings = allEvaluated.filter((f) => f.status === 'open');
+
   if (openCount > 0) {
     process.stdout.write(
       `[tracegraph] ${openCount} open finding(s): ` +
@@ -185,6 +193,36 @@ export function compareCommand(options: CompareOptions): number {
         .join(', ') +
       '\n',
     );
+
+    // IMP-3.3: --verbose prints remediation snippets below each finding
+    if (options.verbose) {
+      process.stdout.write('\n');
+      for (const f of openFindings) {
+        const sevIcon: Record<string, string> = {
+          critical: '🔴', high: '🟠', medium: '🟡', low: '🔵', info: '⚪',
+        };
+        process.stdout.write(
+          `  ${sevIcon[f.severity] ?? '●'} [${f.severity.toUpperCase()}] ${f.title}\n` +
+          `     ${f.description}\n`,
+        );
+        if (f.remediation) {
+          process.stdout.write(`\n  → ${f.remediation.text}\n`);
+          if (f.remediation.code) {
+            for (const [framework, snippet] of Object.entries(f.remediation.code)) {
+              if (!snippet) continue;  // Partial<Record<...>> values may be undefined
+              process.stdout.write(`\n  [${framework}]\n`);
+              for (const line of snippet.split('\n')) {
+                process.stdout.write(`    ${line}\n`);
+              }
+            }
+          }
+          if (f.remediation.docs) {
+            process.stdout.write(`\n  Docs: ${f.remediation.docs}\n`);
+          }
+        }
+        process.stdout.write('\n');
+      }
+    }
   } else {
     process.stdout.write('[tracegraph] No open findings.\n');
   }
@@ -394,6 +432,17 @@ function resolveOutPath(
 ): string {
   if (outArg) return path.resolve(cwd, outArg);
   return path.join(tracegraphDir, 'reports', `${reportId}.report.json`);
+}
+
+/** IMP-3.1: Load tracegraph.config.json from the project root. */
+function loadTracegraphConfig(cwd: string): TracegraphConfig | null {
+  const configPath = path.join(cwd, 'tracegraph.config.json');
+  if (!fs.existsSync(configPath)) return null;
+  try {
+    return JSON.parse(fs.readFileSync(configPath, 'utf8')) as TracegraphConfig;
+  } catch {
+    return null;
+  }
 }
 
 /**

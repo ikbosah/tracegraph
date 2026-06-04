@@ -85,11 +85,26 @@ jobs:
 
       - name: Install Composer dependencies
         run: |
+          # Disable advisory blocking for this test matrix.
+          # Security advisories target production applications; as a library we
+          # intentionally test against pinned framework versions that may carry
+          # advisories.  Blocking them breaks the solver without any security
+          # benefit for a test run.
+          composer config --global -- policy.advisories.block false
+
+          # Update the production illuminate constraints (no --dev: these live
+          # in "require", not "require-dev").
           composer require "illuminate/contracts:${{ matrix.laravel }}" \
                            "illuminate/http:${{ matrix.laravel }}" \
                            "illuminate/support:${{ matrix.laravel }}" \
+                           --no-interaction --no-update
+
+          # Update the dev-only testbench constraint separately so it stays in
+          # "require-dev" and does not pollute the production dependency graph.
+          composer require --dev \
                            "orchestra/testbench:${{ matrix.testbench }}" \
                            --no-interaction --no-update
+
           composer update --prefer-stable --prefer-dist --no-interaction --no-progress
 
       - name: Run PHPUnit tests

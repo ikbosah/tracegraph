@@ -14,7 +14,21 @@ import path from 'path';
 import os   from 'os';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { TraceGraphReporter } from '../src/reporter';
-import type { File as VitestFile, Task } from 'vitest';
+
+// Minimal local stubs — intentionally not imported from 'vitest' so tests
+// compile against any Vitest major version (1–4).
+type StubTask = {
+  id: string; name: string; type: string; mode?: string;
+  tasks?: StubTask[];
+  result?: { state?: string; startTime?: number; duration?: number;
+             errors?: Array<{ name?: string; message?: string; stack?: string }> };
+};
+type StubFile = {
+  id: string; name: string; filepath: string;
+  tasks?: StubTask[];
+  result?: { state?: string; startTime?: number; duration?: number };
+  collectDuration?: number; setupDuration?: number;
+};
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -91,24 +105,22 @@ function readVitestSummaryJson(): Record<string, number> | null {
 /** Minimal VitestFile stub. */
 function makeFile(opts: {
   filepath: string;
-  tasks?: Task[];
+  tasks?: StubTask[];
   durationMs?: number;
-}): VitestFile {
+}): StubFile {
   return {
     id:          opts.filepath,
     name:        path.basename(opts.filepath),
-    type:        'suite',
-    mode:        'run',
     filepath:    opts.filepath,
     tasks:       opts.tasks ?? [],
     result:      { state: 'pass', startTime: 1_700_000_000_000, duration: opts.durationMs ?? 50 },
     collectDuration: 10,
     setupDuration:   5,
-  } as unknown as VitestFile;
+  };
 }
 
 /** Minimal test stub. */
-function makeTest(name: string, status: 'pass' | 'fail' | 'skip' = 'pass'): Task {
+function makeTest(name: string, status: 'pass' | 'fail' | 'skip' = 'pass'): StubTask {
   const errors = status === 'fail'
     ? [{ name: 'AssertionError', message: 'expected 1 to be 2', stack: 'Error: expected 1 to be 2\n  at test' }]
     : undefined;
@@ -124,11 +136,11 @@ function makeTest(name: string, status: 'pass' | 'fail' | 'skip' = 'pass'): Task
       duration:  5,
       errors,
     },
-  } as unknown as Task;
+  };
 }
 
 /** Minimal suite stub. */
-function makeSuite(name: string, children: Task[]): Task {
+function makeSuite(name: string, children: StubTask[]): StubTask {
   return {
     id:    `suite-${name}`,
     name,
@@ -136,7 +148,7 @@ function makeSuite(name: string, children: Task[]): Task {
     mode:  'run',
     tasks: children,
     result: { state: 'pass', startTime: 1_700_000_000_050, duration: 20 },
-  } as unknown as Task;
+  };
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────

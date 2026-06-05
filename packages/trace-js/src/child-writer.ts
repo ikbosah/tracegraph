@@ -69,9 +69,34 @@ export class ChildEventWriter {
     ChildEventWriter._instance = null;
   }
 
+  // In-process event buffer.  Events are batched and flushed to disk either
+  // every FLUSH_INTERVAL_MS or on process exit, whichever comes first.
+  // This avoids one synchronous appendFileSync per event, which would block
+  // Node.js's event loop and significantly slow down test suites (e.g.
+  // supertest-based Express tests) that issue many HTTP requests.
+  private _buffer: string[]  = [];
+  private _flushTimer: ReturnType<typeof setTimeout> | null = null;
+
+  private static readonly FLUSH_INTERVAL_MS = 50;
+
   write(event: TraceEvent): void {
+    this._buffer.push(JSON.stringify(event) + '\n');
+    if (!this._flushTimer) {
+      this._flushTimer = setTimeout(() => {
+        this._flushTimer = null;
+        this._flushSync();
+      }, ChildEventWriter.FLUSH_INTERVAL_MS);
+      // Don't keep the process alive just for the flush timer.
+      if (this._flushTimer.unref) this._flushTimer.unref();
+    }
+  }
+
+  /** Synchronous flush — safe to call from process.exit handlers. */
+  _flushSync(): void {
+    if (this._buffer.length === 0) return;
+    const chunk = this._buffer.splice(0).join('');
     try {
-      fs.appendFileSync(this.jsonlPath, JSON.stringify(event) + '\n', 'utf8');
+      fs.appendFileSync(this.jsonlPath, chunk, 'utf8');
     } catch {
       // Best-effort: never crash the user's process due to tracing errors
     }

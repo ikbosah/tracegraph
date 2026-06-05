@@ -20,7 +20,7 @@ import { SCHEMA_VERSIONS } from '@tracegraph/shared-types';
 import { createEventId } from '@tracegraph/trace-core';
 import { ChildEventWriter } from './child-writer';
 import { writeEvent, currentParentEventId } from './context';
-import { patchGlobalFetch, subscribeUndiciChannel } from './http';
+import { patchGlobalFetch, subscribeUndiciChannel, patchHttpRequest } from './http';
 import { TRACEGRAPH_ENV } from './env';
 
 let initialised = false;
@@ -40,6 +40,9 @@ export function init(): void {
 
   // ── Subscribe to undici diagnostics_channel ───────────────────────────────
   subscribeUndiciChannel();
+
+  // ── Patch http.request / https.request ────────────────────────────────────
+  patchHttpRequest();
 
   // ── Capture console.error → log event ────────────────────────────────────
   const originalConsoleError = console.error.bind(console);
@@ -81,8 +84,21 @@ export function init(): void {
         },
       });
     }
-    // Re-emit so default Node.js exit behaviour still occurs
-    throw err;
+    // If we're the only uncaughtException listener (production), exit with a
+    // non-zero code so the process terminates as expected.
+    // If other listeners are registered (Mocha, Jest, Vitest, etc.), let them
+    // handle the process lifecycle — re-throwing here would crash with our
+    // stack frame on top before the test runner can record the failure.
+    if (process.listenerCount('uncaughtException') <= 1) {
+      process.exit(1);
+    }
+  });
+
+  // ── Flush buffered events before exit ────────────────────────────────────
+  // The ChildEventWriter buffers events for performance.  We must flush
+  // synchronously here so no events are lost when the process exits.
+  process.on('exit', () => {
+    ChildEventWriter.get()?._flushSync();
   });
 
   // ── Write capture-level file on exit ─────────────────────────────────────

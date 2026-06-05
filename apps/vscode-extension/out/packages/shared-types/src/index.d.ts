@@ -241,6 +241,18 @@ export type CompactBaseline = {
 };
 export type FindingSeverity = 'info' | 'low' | 'medium' | 'high' | 'critical';
 export type FindingCategory = 'behavior_change' | 'race_condition' | 'rate_limit' | 'idempotency' | 'retry_storm' | 'security_authentication' | 'security_authorization' | 'security_sensitive_data' | 'security_injection' | 'security_mass_assignment' | 'performance' | 'data_integrity' | 'tracegraph_policy_change';
+/** IMP-3.3: Remediation guidance attached to a Finding. */
+export type RemediationSnippet = {
+    /** Plain-English description of what to fix. */
+    text: string;
+    /**
+     * Per-framework code examples.
+     * Keys match `TraceEvent.framework` values ('express', 'laravel', 'spring', 'fastapi', …).
+     */
+    code?: Partial<Record<string, string>>;
+    /** Documentation URL. */
+    docs?: string;
+};
 export type Finding = {
     id: string;
     /** Stable hash of (ruleId + semantic target + risk resource/action) — never includes file path. */
@@ -257,6 +269,18 @@ export type Finding = {
         line?: number;
     }>;
     recommendation?: string;
+    /** IMP-3.3: Structured remediation guidance with per-framework code examples. */
+    remediation?: RemediationSnippet;
+    /**
+     * IMP-3.2: Route context for scoped suppression matching.
+     * Set when the finding is associated with a specific HTTP route ("GET /invoices").
+     */
+    route?: string;
+    /**
+     * IMP-3.2: Resource context for scoped suppression matching.
+     * Set when the finding is associated with a specific DB table or resource.
+     */
+    resource?: string;
 };
 export type FindingFingerprintInput = {
     ruleId: string;
@@ -285,10 +309,50 @@ export type Suppression = {
     expiresAt: string;
     approvedBy: string;
     createdAt: string;
+    /** Suppress only when finding route matches this exact string or glob pattern ("GET /health*"). */
+    route?: string;
+    /** Suppress only when the affected DB table / resource matches this identifier. */
+    resource?: string;
+    /** Suppress only when the affected source file matches this glob pattern ("src/legacy/**"). */
+    file?: string;
 };
 export type SuppressionsFile = {
     schemaVersion: 'tracegraph.suppressions.v1';
     suppressions: Suppression[];
+};
+/**
+ * IMP-3.1: Per-rule configuration block.
+ * Allows teams to tune findings rules without changing code.
+ */
+export type RuleConfig = {
+    /** Override the default severity. */
+    severity?: FindingSeverity;
+    /** Disable the rule entirely — no findings are produced for it. */
+    disabled?: boolean;
+    /**
+     * Override rule-specific numeric thresholds.
+     * Keys are rule-documented names; e.g. N+1 uses "repetitionCount".
+     */
+    thresholds?: Record<string, number>;
+};
+/** Root shape of `tracegraph.config.json`. Only `rules` is fully typed here; */
+export type TracegraphConfig = {
+    /** Per-rule configuration. Keys are rule IDs (e.g. "reliability.n_plus_one_query"). */
+    rules?: Record<string, RuleConfig>;
+    /** Replay configuration (IMP-5.2). */
+    replay?: {
+        baseUrl?: string;
+        stripHeaders?: string[];
+        allowDestructive?: boolean;
+        environments?: Record<string, {
+            baseUrl: string;
+        }>;
+    };
+    /** Analytics configuration (IMP-7). */
+    analytics?: {
+        optIn?: boolean;
+    };
+    [key: string]: unknown;
 };
 export type FindingApproval = {
     findingFingerprint: string;

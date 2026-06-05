@@ -88,6 +88,7 @@ let fetchPatched = false;
 export function _resetHttpPatchForTest(): void {
   fetchPatched     = false;
   undiciSubscribed = false;
+  httpPatched      = false;
 }
 
 /**
@@ -177,6 +178,109 @@ export function patchGlobalFetch(): void {
       throw err;
     }
   };
+}
+
+// ─── http.request / https.request patch ──────────────────────────────────────
+
+let httpPatched = false;
+
+/**
+ * Patch Node.js's built-in http.request() and https.request() to emit
+ * external_http_call events.  This captures supertest, got, node-fetch, and
+ * any library that ultimately calls http.request() directly.
+ *
+ * For localhost/127.0.0.1 calls (common in test suites where supertest binds
+ * to a random port) the URL is normalised to just the path so that port
+ * differences between baseline and PR runs don't produce false positives.
+ */
+export function patchHttpRequest(): void {
+  if (httpPatched) return;
+  httpPatched = true;
+
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const httpMod  = require('http')  as typeof import('http');
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const httpsMod = require('https') as typeof import('https');
+
+  for (const [mod, defaultProto] of [
+    [httpMod,  'http'] ,
+    [httpsMod, 'https'],
+  ] as const) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const orig = (mod.request as (...a: any[]) => import('http').ClientRequest).bind(mod);
+
+    function extractInfo(args: unknown[]): { url: string; method: string } {
+      const a0 = args[0];
+      // Second arg may be options (object) or callback (function)
+      const maybeOpts = args.length >= 2 && typeof args[1] === 'object' && args[1] !== null
+        ? (args[1] as import('http').RequestOptions)
+        : {} as import('http').RequestOptions;
+
+      if (typeof a0 === 'string' || a0 instanceof URL) {
+        const parsed = a0 instanceof URL ? a0 : (() => { try { return new URL(a0); } catch { return null; } })();
+        const method = (maybeOpts.method ?? 'GET').toUpperCase();
+        if (parsed) {
+          const isLocal = ['127.0.0.1', 'localhost', '::1', '0.0.0.0'].includes(parsed.hostname);
+          return { url: isLocal ? parsed.pathname + parsed.search : parsed.toString(), method };
+        }
+        return { url: String(a0), method };
+      }
+
+      // RequestOptions object
+      const opts = a0 as import('http').RequestOptions;
+      const host   = opts.hostname ?? opts.host ?? 'localhost';
+      const port   = opts.port;
+      const path   = opts.path ?? '/';
+      const method = (opts.method ?? 'GET').toUpperCase();
+      const isLocal = ['127.0.0.1', 'localhost', '::1', '0.0.0.0'].includes(host);
+      const url = isLocal
+        ? path
+        : `${opts.protocol ?? `${defaultProto}:`}//${host}${port ? `:${port}` : ''}${path}`;
+      return { url, method };
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (mod as any).request = function tracedHttpRequest(...args: unknown[]) {
+      const req = orig(...args);
+      const writer = ChildEventWriter.get();
+      if (!writer) return req;
+
+      const { url, method } = extractInfo(args);
+      const eventId   = createEventId();
+      const startTime = Date.now();
+
+      writeEvent({
+        schemaVersion: SCHEMA_VERSIONS.event,
+        eventId,
+        traceId:       writer.traceId,
+        parentEventId: currentParentEventId(),
+        type:          'external_http_call',
+        language:      'javascript',
+        name:          `${method} ${url}`,
+        startTime,
+        metadata:      { method, url, via: 'http.request' },
+      });
+
+      req.once('response', (res) => {
+        const endTime = Date.now();
+        writeEvent({
+          schemaVersion: SCHEMA_VERSIONS.event,
+          eventId:       createEventId(),
+          traceId:       writer.traceId,
+          parentEventId: eventId,
+          type:          'http_response',
+          language:      'javascript',
+          name:          `${method} ${url} → ${res.statusCode}`,
+          startTime,
+          endTime,
+          durationMs:    endTime - startTime,
+          output:        sanitize({ statusCode: res.statusCode }) as TraceEvent['output'],
+        });
+      });
+
+      return req;
+    };
+  }
 }
 
 // ─── axios interceptors ───────────────────────────────────────────────────────

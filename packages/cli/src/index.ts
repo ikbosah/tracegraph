@@ -59,6 +59,7 @@ import {
 import { pullBaselinesFromTeamServer } from './commands/team-server';
 import { testgenCommand }              from './commands/testgen';
 import { baselineSuggestUpdateCommand } from './commands/baseline-suggest';
+import { auditCommand }                from './commands/audit';
 
 // ── Extract the wrapped command (everything after --) ─────────────────────
 const rawArgv     = process.argv.slice(2); // strip 'node' and script path
@@ -584,6 +585,32 @@ program
     dryRun?:    boolean;
   }) => {
     process.exit(await testgenCommand(traceFile, options));
+  });
+
+// ── tracegraph audit ─────────────────────────────────────────────────────────
+program
+  .command('audit')
+  .description('Fork a GitHub repo, find a major PR, run TraceGraph, and report findings')
+  .argument('<github-url>', 'GitHub repository URL (https://github.com/owner/repo)')
+  .option('--pr <number>',        'Analyse a specific PR number (skips scoring/selection)',
+          (v) => parseInt(v, 10))
+  .option('--workspace <dir>',    'Directory to clone into (default: ~/.tracegraph/audits/)')
+  .option('--skip-fork',          'Clone upstream directly without forking (no GitHub fork created)')
+  .option('--token <token>',      'GitHub personal access token (default: $GITHUB_TOKEN)')
+  .option('--out <file>',         'Copy the generated markdown report to this file')
+  .option('--json',               'Print machine-readable JSON summary')
+  .option('--timeout <seconds>',  'Per-phase timeout in seconds (default: 300)',
+          (v) => parseInt(v, 10))
+  .action(async (githubUrl: string, options: {
+    pr?:        number;
+    workspace?: string;
+    skipFork?:  boolean;
+    token?:     string;
+    out?:       string;
+    json?:      boolean;
+    timeout?:   number;
+  }) => {
+    process.exit(await auditCommand(githubUrl, options));
   });
 
 // ── tracegraph clean ──────────────────────────────────────────────────────

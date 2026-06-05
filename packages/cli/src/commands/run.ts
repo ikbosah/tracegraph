@@ -70,6 +70,14 @@ function detectAndInjectReporter(
     return { args, messages, injected: false, runner: null };
   }
 
+  // TRACEGRAPH_NO_INJECT=1 disables automatic reporter injection.
+  // The audit command sets this flag and handles reporter injection itself
+  // (using absolute paths to work in external repos that don't have the
+  // tracegraph packages installed).
+  if (process.env['TRACEGRAPH_NO_INJECT'] === '1') {
+    return { args, messages, injected: false, runner };
+  }
+
   // Check whether a TraceGraph reporter is already wired in (config or explicit flag)
   const alreadyPresent = args.some((a) =>
     /--reporters?=@tracegraph\//i.test(a),
@@ -282,9 +290,11 @@ export async function runCommand(
         exitCode = EXIT_CODES.CLI_ERROR;
       } else {
         const result = spawnSync(command, commandArgs, {
-          stdio: 'inherit',  // pass through so the user sees the command's output
-          shell: false,
-          env:   childEnv,
+          stdio:  'inherit',  // pass through so the user sees the command's output
+          // On Windows, package-manager binaries (npm, pnpm, yarn) are .cmd batch
+          // files that require cmd.exe to execute.  shell:false would cause ENOENT.
+          shell:  process.platform === 'win32',
+          env:    childEnv,
         });
 
         if (result.error) {
@@ -530,7 +540,7 @@ function runServerMode(
 
     const child = spawn(command, args, {
       stdio: ['inherit', 'pipe', 'inherit'],
-      shell: false,
+      shell: process.platform === 'win32',   // Windows: .cmd binaries need a shell
       env,
     });
 

@@ -1,6 +1,6 @@
 {
   "name": "@tracegraph/trace-xdebug",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Streaming Xdebug .xt trace file parser — converts Xdebug function call logs into TraceEvent streams",
   "main": "dist/index.js",
   "module": "dist/index.mjs",

@@ -1,6 +1,6 @@
 {
   "name": "@tracegraph/team-server",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "TraceGraph Team Server — self-hosted REST API and React dashboard for trace/baseline/finding management",
   "private": true,
   "main": "dist/index.js",

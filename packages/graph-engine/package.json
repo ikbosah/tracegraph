@@ -1,6 +1,6 @@
 {
   "name": "@tracegraph/graph-engine",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Converts TraceSession to a graph structure; produces baselines, diffs, and findings",
   "main": "dist/index.js",
   "module": "dist/index.mjs",

@@ -225,6 +225,20 @@ describe('M5.6 — reliability.n_plus_one_query', () => {
     );
     expect(rule[0]!.evidence[0]!.eventIds).toHaveLength(10);
   });
+
+  it('returns no findings for cli_command sessions (full test-suite run)', () => {
+    // A test suite naturally repeats the same query across independent tests.
+    // Flagging these as N+1 would be a systematic false positive.
+    const events = Array.from({ length: 20 }, () => dbQueryEvent('users', 'select'));
+    const session: TraceSession = {
+      ...makeSession(events),
+      entrypoint: { type: 'cli_command', command: 'npm test' },
+    };
+    const rule = analyseTraceFindings(session).filter(
+      (f) => f.ruleId === ANALYSE_RULES.N_PLUS_ONE_QUERY,
+    );
+    expect(rule).toHaveLength(0);
+  });
 });
 
 // ─── M5.7: Duplicate side effects ─────────────────────────────────────────────
@@ -277,6 +291,24 @@ describe('M5.7 — reliability.duplicate_side_effects', () => {
       externalHttpCallEvent('GET', 'https://api.example.com/data'),
       externalHttpCallEvent('GET', 'https://api.example.com/data'),
     ]);
+    const rule = analyseTraceFindings(session).filter(
+      (f) => f.ruleId === ANALYSE_RULES.DUPLICATE_SIDE_EFFECTS,
+    );
+    expect(rule).toHaveLength(0);
+  });
+
+  it('returns no findings for cli_command sessions (full test-suite run)', () => {
+    // A test suite that runs many tests against the same routes will produce
+    // hundreds of POST calls to the same URL — none of them are duplicates
+    // within a single request lifecycle.  Express test suite is the canonical
+    // example: POST "/" × 228 across all mocha tests is not a bug.
+    const events = Array.from({ length: 228 }, () =>
+      externalHttpCallEvent('POST', '/'),
+    );
+    const session: TraceSession = {
+      ...makeSession(events),
+      entrypoint: { type: 'cli_command', command: 'npm test' },
+    };
     const rule = analyseTraceFindings(session).filter(
       (f) => f.ruleId === ANALYSE_RULES.DUPLICATE_SIDE_EFFECTS,
     );

@@ -7,9 +7,11 @@
  */
 import fs            from 'fs';
 import path          from 'path';
+import readline      from 'readline';
 import { spawnSync } from 'child_process';
+import { getPythonVersion, installGraphify, isGraphifyAvailable } from '../setup/install-graphify';
 
-export function initCommand(): void {
+export async function initCommand(): Promise<void> {
   const cwd = process.cwd();
 
   // ── Pre-flight environment checks ─────────────────────────────────────────
@@ -36,6 +38,88 @@ export function initCommand(): void {
   process.stdout.write(`  2. Add middleware:        app.use(traceExpress())  // before routes\n`);
   process.stdout.write(`  3. Run a trace:          ${pm} run trace:test\n`);
   process.stdout.write(`  4. View the graph:       ${pm} run trace:report\n\n`);
+
+  // ── G1: Graphify — detect, offer to install, or confirm already present ───
+  await detectAndOfferGraphify();
+}
+
+/**
+ * G1: Check if Graphify is installed.
+ *   - Already installed  → confirm and hint at `graph build`
+ *   - Python found, Graphify missing, interactive TTY → prompt to install now
+ *   - Non-interactive (CI) or no Python → print manual install hint
+ */
+async function detectAndOfferGraphify(): Promise<void> {
+  if (isGraphifyAvailable()) {
+    // Get version string for the confirmation message
+    let version = '';
+    try {
+      const { detectGraphify } = require('@tracegraph/static-graph') as
+        typeof import('@tracegraph/static-graph');
+      version = detectGraphify().version ?? '';
+    } catch { /* ignore */ }
+    process.stdout.write(
+      `  ✅ Graphify ${version} detected.\n` +
+      `     Run \`tracegraph graph build\` to enable architecture-aware coverage.\n\n`,
+    );
+    return;
+  }
+
+  const pyVersion = getPythonVersion();
+
+  if (!pyVersion) {
+    // Python itself is missing — can't run pip
+    process.stdout.write(
+      `  ℹ️  Graphify requires Python 3.10+ (not found in PATH).\n` +
+      `     Install Python, then run:\n` +
+      `       uv tool install graphifyy   →   tracegraph graph build\n\n`,
+    );
+    return;
+  }
+
+  if (!process.stdin.isTTY) {
+    // Non-interactive (CI, piped, etc.) — just print the hint
+    process.stdout.write(
+      `  ℹ️  Python ${pyVersion} found but Graphify is not installed.\n` +
+      `     Run: uv tool install graphifyy   →   tracegraph graph build\n\n`,
+    );
+    return;
+  }
+
+  // Interactive: ask once
+  const answer = await new Promise<string>((resolve) => {
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    rl.question(
+      `  Python ${pyVersion} found. Install Graphify for architecture analysis? (y/N): `,
+      (a) => { rl.close(); resolve(a.trim().toLowerCase()); },
+    );
+  });
+
+  if (answer !== 'y' && answer !== 'yes') {
+    process.stdout.write(
+      `\n  ℹ️  Skipped. To install later:\n` +
+      `       uv tool install graphifyy   →   tracegraph graph build\n\n`,
+    );
+    return;
+  }
+
+  process.stdout.write('\n');
+  const result = installGraphify({ quiet: false });
+
+  if (result.ok && !result.alreadyInstalled) {
+    process.stdout.write(
+      `\n  ✅ Graphify installed via ${result.installedWith}.\n` +
+      `     Run \`tracegraph graph build\` to build the architecture graph.\n\n`,
+    );
+  } else if (result.alreadyInstalled) {
+    process.stdout.write(`\n  ✅ Graphify is already installed.\n\n`);
+  } else {
+    process.stdout.write(
+      `\n  ⚠️  Installation failed. Run manually:\n` +
+      `       uv tool install graphifyy\n` +
+      `     Or: tracegraph graph doctor --install\n\n`,
+    );
+  }
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

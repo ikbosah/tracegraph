@@ -116,4 +116,25 @@ CREATE TABLE IF NOT EXISTS suppressions (
   approved_by   TEXT NOT NULL,
   created_at    INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
 );
+
+-- ── Architecture snapshots (G9) ───────────────────────────────────────────────
+-- One row per architecture baseline upload (each CI run that uploads a snapshot).
+-- The full ArchitectureBaseline JSON is stored as content for graph queries.
+-- The summary columns (node_count etc.) are extracted for fast drift chart queries.
+CREATE TABLE IF NOT EXISTS architecture_snapshots (
+  id               TEXT PRIMARY KEY,
+  project_id       TEXT NOT NULL REFERENCES projects(id),
+  run_id           TEXT REFERENCES runs(id),
+  commit           TEXT,
+  graphify_version TEXT,
+  node_count       INTEGER DEFAULT 0,
+  edge_count       INTEGER DEFAULT 0,
+  community_count  INTEGER DEFAULT 0,
+  god_node_count   INTEGER DEFAULT 0,
+  cross_edge_count INTEGER DEFAULT 0,
+  debt_score       REAL DEFAULT 0,      -- 0–100 architecture health score
+  content          TEXT NOT NULL,       -- full JSON of ArchitectureBaseline
+  created_at       INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+);
+CREATE INDEX IF NOT EXISTS arch_snapshots_project ON architecture_snapshots(project_id, created_at DESC);
 `;

@@ -52,6 +52,44 @@ export async function finaliseTrace(opts: FinaliseTraceOptions): Promise<string>
   // Read all events from the JSONL stream
   const events = readJsonlEvents(jsonlTmpPath);
 
+  // ── Per-test entrypoint override ────────────────────────────────────────────
+  // PHPUnit (and Vitest) per-test trace files contain a `test_run` event whose
+  // `name` field is the unique test identity (e.g. "SomeTest::testMethod").
+  // Without this override, ALL per-test traces from a suite-level run share the
+  // cli_command entrypoint ("php artisan test"), so they all produce the same
+  // testId and `baseline create` collapses them into a single baseline file —
+  // causing every Phase-C candidate to compare against one stale Phase-A snapshot
+  // and producing hundreds of false-positive "Authorization check added / DB
+  // operation count changed" findings.
+  //
+  // When a test_run event is present we override the entrypoint with the test's
+  // own identity.  For the suite-level main trace (which has no test_run event
+  // because TestFinishedSubscriber writes to {runDir}/tests/, not the main file)
+  // opts.entrypoint is preserved unchanged.
+  let effectiveEntrypoint = opts.entrypoint;
+  let effectiveStatus     = opts.status;
+
+  const testRunEvent = events.find((e) => e.type === 'test_run');
+  if (testRunEvent) {
+    const testFile = events.find((e) => e.type === 'test_file')?.file;
+    effectiveEntrypoint = {
+      type:     'test_case',
+      testName: testRunEvent.name,
+      ...(testFile ? { testFile } : {}),
+    };
+
+    // Override session.status from the per-test outcome stored in metadata.
+    // metadata.testStatus ('pass' | 'fail' | 'skip') is the accurate per-test
+    // result written by the test reporter.  opts.status is the overall CLI run
+    // status, which becomes 'failed' whenever any test in the suite fails —
+    // causing all per-test trace files to be written with status='failed' even
+    // when the individual test passed.
+    const rawStatus = testRunEvent.metadata?.['testStatus'] as string | undefined;
+    if (rawStatus === 'pass')  effectiveStatus = 'passed';
+    if (rawStatus === 'fail')  effectiveStatus = 'failed';
+    // 'skip' → leave effectiveStatus as-is (opts.status, usually 'passed')
+  }
+
   const session: TraceSession = {
     schemaVersion: SCHEMA_VERSIONS.trace,
     traceId: opts.traceId,
@@ -61,10 +99,10 @@ export async function finaliseTrace(opts: FinaliseTraceOptions): Promise<string>
     workspaceRoot: opts.workspaceRoot,
     language: opts.language,
     ...(opts.framework ? { framework: opts.framework } : {}),
-    entrypoint: opts.entrypoint,
+    entrypoint: effectiveEntrypoint,
     startedAt: opts.startedAt,
     endedAt: opts.endedAt,
-    status: opts.status,
+    status: effectiveStatus,
     captureLevel: opts.captureLevel,
     events,
     ...(opts.metadata ? { metadata: opts.metadata } : {}),

@@ -37,6 +37,12 @@ import type { TraceEvent, CaptureLevel } from '@tracegraph/shared-types';
 // the reporter-loading mechanism (v1: CJS require, v2+: ESM import).
 // Using our own minimal structural types makes the reporter portable across all
 // supported major versions (1–4) without needing conditional imports.
+//
+// v1–v3: Task-tree model.  onFinished(files: VFile[]) fires after all tests.
+// v4:    Module/Suite/Case graph.  onTestRunEnd(modules: V4TestModule[]) fires
+//        instead — onFinished is never called by the v4 runner.
+
+// ── v1–v3 types ───────────────────────────────────────────────────────────────
 
 interface VTaskError {
   name?:    string;
@@ -70,6 +76,52 @@ interface VFile {
   result?:  VTaskResult;
 }
 
+// ── v4 types ──────────────────────────────────────────────────────────────────
+//
+// v4 replaced Task trees with a Module/Suite/Case graph.
+// Timing moved from result.{startTime,duration} into diagnostic().
+// Both result() and diagnostic() are methods, not plain properties.
+
+interface V4Error {
+  name?:    string;
+  message?: string;
+  stack?:   string;
+}
+
+interface V4Result {
+  state?:   string;     // 'pass' | 'fail' | 'skip' | 'todo'
+  errors?:  V4Error[];
+}
+
+interface V4Diagnostic {
+  duration?:  number;
+  startTime?: number;
+}
+
+interface V4Node {
+  id:            string;
+  name:          string;
+  parent?:       V4Node;
+  result?():     V4Result | undefined;
+  diagnostic?(): V4Diagnostic;
+}
+
+interface V4TestCase extends V4Node {
+  fullName?: string;
+}
+
+interface V4TestModule extends V4Node {
+  /** Absolute UNIX file path (vitest v4: moduleId). Replaces the v1–3 filepath property. */
+  moduleId?:         string;
+  /** Path relative to project root (vitest v4). */
+  relativeModuleId?: string;
+  /** v1–v3 compat: some builds still expose filepath. */
+  filepath?:         string;
+  children?: {
+    allTests(): Iterable<V4TestCase>;
+  };
+}
+
 // ─── Internal state ────────────────────────────────────────────────────────────
 
 type WriterState = {
@@ -94,11 +146,13 @@ export class TraceGraphReporter {
   //
   // Method signatures are intentionally broader than Vitest's typed interface:
   //
-  //  • onInit(_ctx?: unknown)            — Vitest 2+ passes a Vitest context; we
-  //                                        ignore it and read env vars instead.
-  //  • onFinished(files, _errors?)       — Vitest 2+ adds an errors array; we
-  //                                        only need the files parameter.
-  //  • onTaskUpdate(_packs: unknown[])   — We don't use incremental updates.
+  //  • onInit(_ctx?: unknown)              — Vitest 2+ passes a Vitest context; we
+  //                                          ignore it and read env vars instead.
+  //  • onFinished(files, _errors?)         — v1–v3: fires after all tests; v4 never
+  //                                          calls this (replaced by onTestRunEnd).
+  //  • onTestRunEnd(mods, _errs?, _rsn?)   — v4 replacement for onFinished; receives
+  //                                          TestModule[] with the new graph API.
+  //  • onTaskUpdate(_packs: unknown[])     — We don't use incremental updates.
   //
   // Using `unknown` args means this class satisfies the Reporter interface of
   // every Vitest major version without importing its types.
@@ -150,8 +204,37 @@ export class TraceGraphReporter {
     this.writeCaptureLevel(total, pass, fail, skip);
   }
 
-  // No-op incremental update — we process everything in onFinished.
+  // No-op incremental update — we process everything in onFinished / onTestRunEnd.
   onTaskUpdate(_packs: unknown[]): void { /* no-op */ }
+
+  /**
+   * Vitest v4 replacement for onFinished.
+   * Called once after all test modules have finished.
+   * Uses the new Module/Suite/Case graph instead of the old Task tree.
+   */
+  onTestRunEnd(testModules: unknown[] = [], _errors?: unknown, _reason?: unknown): void {
+    if (this.state === null) return;
+
+    const workspaceRoot = process.cwd();
+    let total = 0, pass = 0, fail = 0, skip = 0;
+
+    for (const raw of testModules) {
+      const mod = raw as V4TestModule;
+      if (typeof mod.children?.allTests !== 'function') continue;
+
+      for (const rawCase of mod.children.allTests()) {
+        const tc = rawCase as V4TestCase;
+        this.writeTestCaseTraceV4(tc, mod, workspaceRoot);
+        total++;
+        const status = normaliseStatus(tc.result?.()?.state);
+        if (status === 'pass') pass++;
+        else if (status === 'fail') fail++;
+        else skip++;
+      }
+    }
+
+    this.writeCaptureLevel(total, pass, fail, skip);
+  }
 
   // ─── Private helpers ──────────────────────────────────────────────────────────
 
@@ -256,6 +339,116 @@ export class TraceGraphReporter {
     }
   }
 
+  /**
+   * Vitest v4 variant: builds trace events from the Module/Suite/Case graph.
+   * Suite ancestry is reconstructed by walking tc.parent up to the module node.
+   */
+  private writeTestCaseTraceV4(
+    tc: V4TestCase,
+    mod: V4TestModule,
+    workspaceRoot: string,
+  ): void {
+    if (this.state === null) return;
+
+    // v4: moduleId is the absolute path; v1-3 used filepath
+    const filepath = mod.moduleId ?? mod.filepath ?? '';
+    const relPath  = mod.relativeModuleId
+      ?? (filepath ? path.relative(workspaceRoot, filepath).replace(/\\/g, '/') : (mod.name ?? 'unknown'));
+
+    // Walk parent chain up to (but not including) the module to get suite ancestry.
+    const suiteChain: V4Node[] = [];
+    let node: V4Node | undefined = tc.parent;
+    while (node && node.id !== mod.id) {
+      suiteChain.unshift(node);
+      node = node.parent;
+    }
+
+    const testTraceId = createTraceId();
+    const jsonlPath   = path.join(this.state.testsDir, `${testTraceId}.events.jsonl.tmp`);
+    const events: TraceEvent[] = [];
+
+    // ── test_file ─────────────────────────────────────────────────────────────
+    const fileEventId = createEventId();
+    const modDiag     = mod.diagnostic?.() ?? {};
+    events.push({
+      schemaVersion: SCHEMA_VERSIONS.event,
+      eventId:       fileEventId,
+      traceId:       testTraceId,
+      parentEventId: null,
+      type:          'test_file',
+      language:      'javascript',
+      framework:     'vitest',
+      name:          relPath,
+      file:          relPath,
+      startTime:     modDiag.startTime ?? this.state.startedAt,
+      endTime:       (modDiag.startTime ?? this.state.startedAt) + (modDiag.duration ?? 0),
+      durationMs:    modDiag.duration ?? 0,
+      metadata:      { filepath: filepath || relPath },
+    });
+
+    // ── test_suite events ─────────────────────────────────────────────────────
+    let parentEventId: string = fileEventId;
+    for (const suite of suiteChain) {
+      const suiteEventId = createEventId();
+      const suiteDiag    = suite.diagnostic?.() ?? {};
+      events.push({
+        schemaVersion: SCHEMA_VERSIONS.event,
+        eventId:       suiteEventId,
+        traceId:       testTraceId,
+        parentEventId,
+        type:          'test_suite',
+        language:      'javascript',
+        framework:     'vitest',
+        name:          suite.name,
+        startTime:     suiteDiag.startTime ?? this.state.startedAt,
+        durationMs:    suiteDiag.duration ?? 0,
+      });
+      parentEventId = suiteEventId;
+    }
+
+    // ── test_run event ────────────────────────────────────────────────────────
+    const result     = tc.result?.() ?? {};
+    const tcDiag     = tc.diagnostic?.() ?? {};
+    const testStatus = normaliseStatus(result.state);
+    const firstError = result.errors?.[0];
+
+    events.push({
+      schemaVersion: SCHEMA_VERSIONS.event,
+      eventId:       createEventId(),
+      traceId:       testTraceId,
+      parentEventId,
+      type:          'test_run',
+      language:      'javascript',
+      framework:     'vitest',
+      name:          tc.name,
+      startTime:     tcDiag.startTime ?? this.state.startedAt,
+      endTime:       tcDiag.startTime
+        ? tcDiag.startTime + (tcDiag.duration ?? 0)
+        : undefined,
+      durationMs:    tcDiag.duration ?? 0,
+      metadata: {
+        testStatus,
+        suiteName: suiteChain.length > 0
+          ? suiteChain[suiteChain.length - 1]!.name
+          : undefined,
+      },
+      ...(firstError ? {
+        error: {
+          type:    firstError.name ?? 'AssertionError',
+          message: firstError.message ?? String(firstError),
+          stack:   firstError.stack,
+        },
+      } : {}),
+    });
+
+    try {
+      const content = events.map((e) => JSON.stringify(e)).join('\n') + '\n';
+      fs.writeFileSync(jsonlPath, content, 'utf8');
+    } catch {
+      // Best-effort: never let tracing errors affect the test run
+    }
+  }
+
   private writeCaptureLevel(
     total: number,
     pass:  number,
@@ -332,12 +525,14 @@ function collectTestCases(file: VFile): TestCase[] {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-/** Maps Vitest's internal TaskState to our canonical test status string. */
+/** Maps Vitest's internal TaskState to our canonical test status string.
+ * v1-v3 use 'pass'/'fail'/'skip'; v4 uses 'passed'/'failed'/'skipped'. */
 function normaliseStatus(state: string | undefined): 'pass' | 'fail' | 'skip' {
-  if (state === 'pass')                    return 'pass';
-  if (state === 'fail')                    return 'fail';
-  if (state === 'skip' || state === 'todo') return 'skip';
-  return 'skip'; // 'run', undefined — shouldn't happen in onFinished
+  if (state === 'pass'   || state === 'passed')           return 'pass';
+  if (state === 'fail'   || state === 'failed')           return 'fail';
+  if (state === 'skip'   || state === 'skipped'
+   || state === 'todo'   || state === 'pending')          return 'skip';
+  return 'skip'; // 'run', undefined — shouldn't happen after test run completes
 }
 
 // ─── Default export ───────────────────────────────────────────────────────────

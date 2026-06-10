@@ -1,6 +1,6 @@
 {
   "name": "@tracegraph/cli",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "CLI-first runtime assurance platform",
   "main": "dist/index.js",
   "bin": {
@@ -11,12 +11,13 @@
     "bin",
     "webview-bundle"
   ],
+  "scripts": {
+    "build":       "tsup src/index.ts --format cjs --outDir dist",
+    "typecheck":   "tsc --noEmit",
+    "postinstall": "node ./bin/postinstall.js || true"
+  },
   "publishConfig": {
     "access": "public"
-  },
-  "scripts": {
-    "build": "tsup src/index.ts --format cjs --outDir dist",
-    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@tracegraph/ai-coverage": "workspace:*",
@@ -24,6 +25,7 @@
     "@tracegraph/graph-engine": "workspace:*",
     "@tracegraph/scenario-runner": "workspace:*",
     "@tracegraph/shared-types": "workspace:*",
+    "@tracegraph/static-graph": "workspace:*",
     "@tracegraph/trace-core": "workspace:*",
     "@tracegraph/trace-xdebug": "workspace:*",
     "commander": "^12.1.0"

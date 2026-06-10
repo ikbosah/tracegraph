@@ -1,6 +1,6 @@
 {
   "name": "@tracegraph/trace-js",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "JavaScript/TypeScript instrumentation adapters for TraceGraph",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
@@ -29,7 +29,7 @@
     "access": "public"
   },
   "scripts": {
-    "build": "tsup src/index.ts src/register.ts src/register-cjs.ts --format cjs,esm --dts --external '@tracegraph/*' --external express",
+    "build": "tsup",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

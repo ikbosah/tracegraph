@@ -8,7 +8,7 @@
  *   - Validation event removed       → High
  *   - Business logic event removed   → Medium
  *   - Any security-critical event removed → Critical (overrides role)
- *   - Event added (auth-related)     → High
+ *   - Event added (auth-related)     → Medium (added checks are often security improvements)
  *   - Resource operation count change → Medium
  *   - Response shape: field removed  → Low
  *   - Response shape: field added    → info
@@ -27,6 +27,7 @@ import type {
   FindingSeverity,
   FindingCategory,
   SignatureChange,
+  TestIdentity,
 } from '@tracegraph/shared-types';
 
 // ─── Rule IDs ─────────────────────────────────────────────────────────────────
@@ -40,6 +41,9 @@ const RULES = {
   RESOURCE_COUNT_CHANGED:       'behavior.resource_count.changed',
   RESPONSE_FIELD_REMOVED:       'behavior.response_shape.field_removed',
   RESPONSE_FIELD_ADDED:         'behavior.response_shape.field_added',
+  // G6: evidence continuity
+  TEST_EVIDENCE_UNMATCHED:      'evidence.test_case.unmatched',
+  TEST_FILE_UNMATCHED:          'evidence.test_file.unmatched',
 } as const;
 
 // ─── Public API ───────────────────────────────────────────────────────────────
@@ -53,8 +57,11 @@ export function diffToFindings(diff: BehaviorDiff): Finding[] {
 
   // ── Removed signatures ────────────────────────────────────────────────────
   for (const removed of diff.removedSignatures) {
-    const { ruleId, severity, category, title, description, recommendation } =
-      classifyRemovedSignature(removed);
+    const classified = classifyRemovedSignature(removed);
+    // null = intentionally skipped (e.g. Pest eval'd virtual file)
+    if (classified === null) continue;
+    const { ruleId, severity, category, title, description, recommendation, testIdentity } =
+      classified;
 
     const fingerprint = computeFingerprint({
       ruleId,
@@ -80,6 +87,8 @@ export function diffToFindings(diff: BehaviorDiff): Finding[] {
       evidence:    [{ traceId: diff.traceId, eventIds: [] }],
       recommendation,
       route:       routeStr,
+      // G6: carry test identity for evidence_continuity findings
+      ...(testIdentity ? { testIdentity } : {}),
     });
   }
 
@@ -102,13 +111,19 @@ export function diffToFindings(diff: BehaviorDiff): Finding[] {
       id:          `find_${fingerprint}`,
       fingerprint,
       ruleId,
-      severity:    'high',
+      severity:    'medium',
       category:    'behavior_change',
       title:       `Authorization check added: ${sigLabel(added)}`,
-      description: `A new authorization check was introduced: "${added.eventName ?? sigLabel(added)}". ` +
-                   `Verify this is intentional and does not break existing authorized flows.`,
+      description: `A new authorization check appears in the candidate run but was absent in the ` +
+                   `baseline: "${added.eventName ?? sigLabel(added)}". ` +
+                   `This may indicate a security improvement, or a capture-depth mismatch between ` +
+                   `baseline and candidate (baseline created at a lower instrumentation level).`,
       evidence:    [{ traceId: diff.traceId, eventIds: added.eventId ? [added.eventId] : [] }],
-      recommendation: 'Review the new authorization check and ensure all legitimate callers are still permitted.',
+      recommendation:
+        'Verify whether this authorization check is intentional. Adding authorization is often ' +
+        'a security improvement. If the PR does not touch this code path and the baseline was ' +
+        'created with lower instrumentation, consider regenerating the baseline at the same ' +
+        'capture level as the candidate.',
       route:       addedRouteStr,
     });
   }
@@ -216,17 +231,165 @@ export function computeFingerprint(input: {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function classifyRemovedSignature(removed: SignatureChange): {
+function classifyRemovedSignature(removed: SignatureChange): null | {
   ruleId:         string;
   severity:       FindingSeverity;
   category:       FindingCategory;
   title:          string;
   description:    string;
   recommendation: string;
+  testIdentity?:  TestIdentity;
 } {
   const label = sigLabel(removed);
 
   const eventLabel = removed.eventName ?? label;
+
+  // G6 — Test artifact evidence: test_file and test_run events are not
+  // application business logic.  When they disappear from the candidate run it
+  // means a previously baselined test was not observed — which is an evidence
+  // continuity finding, not a behaviour removal.
+  if (removed.role === 'test_artifact') {
+    const isFileEvent = removed.signature.eventType === 'test_file';
+    const ruleId     = isFileEvent ? RULES.TEST_FILE_UNMATCHED : RULES.TEST_EVIDENCE_UNMATCHED;
+
+    // Reconstruct as much human-readable identity as the signature carries.
+    const className  = removed.signature.className ?? undefined;
+    const method     = removed.signature.functionName ?? undefined;
+    const framework  = removed.signature.framework ?? undefined;
+
+    // ── Pest: eval'd virtual file detection ──────────────────────────────────
+    // Pest generates test cases via eval() — the resulting "file" identity is a
+    // virtual path like:
+    //   "vendor/pestphp/pest/src/Factories/TestCaseFactory.php(175) : eval()'d code"
+    // This is NOT a real user-authored test file. Skip the file-level finding;
+    // individual test cases from that file will have their own case-level findings.
+    if (isFileEvent) {
+      const filePath = removed.signature.functionName ?? '';
+      if (filePath.includes("eval()'d code")) {
+        return null;  // Pest internal virtual file — not a user test file
+      }
+    }
+
+    // ── Pest: decode __pest_evaluable_ method names ───────────────────────────
+    // Pest internally names eval'd it() closures as __pest_evaluable_<snake_case>.
+    // E.g.: __pest_evaluable_it_strips_SSRF_vectors_injected_via_address_template_placeholders
+    // Decode these to produce human-readable names and usable verification commands.
+    let pestHumanName: string | null = null;
+    if (!isFileEvent && method?.startsWith('__pest_evaluable_')) {
+      const body    = method.slice('__pest_evaluable_'.length); // "it_strips_SSRF_vectors..."
+      const decoded = body.replace(/_/g, ' ');                  // "it strips SSRF vectors..."
+      pestHumanName = decoded.startsWith('it ')
+        ? `it('${decoded.slice(3)}')`                           // "it('strips SSRF vectors...')"
+        : decoded;
+    }
+
+    let displayName: string;
+    if (isFileEvent) {
+      // functionName holds the relative file path for test_file events
+      displayName = removed.signature.functionName ?? eventLabel;
+    } else if (pestHumanName) {
+      displayName = pestHumanName;
+    } else {
+      displayName = className && method
+        ? `${className}::${method}`
+        : (method ?? eventLabel);
+    }
+
+    const testIdentity: TestIdentity = {
+      testName:     displayName,
+      testFile:     isFileEvent ? (removed.signature.functionName ?? undefined) : undefined,
+      className,
+      method:       isFileEvent ? undefined : method,  // keep raw for fingerprint stability
+      framework,
+      identityHash: removed.identityHash,
+    };
+
+    // ── Framework-aware text fragments ───────────────────────────────────────
+    // "excluded by PHPUnit config" is PHPUnit-specific — use the right config name per framework.
+    const configRef =
+      framework === 'phpunit' || framework === 'pest' ? 'PHPUnit config' :
+      framework === 'vitest'                          ? 'vitest config' :
+      framework === 'jest'                            ? 'jest config' :
+      'test runner config';
+
+    // Config file name for step 3 of the verification checklist.
+    const configFile =
+      framework === 'phpunit' || framework === 'pest' ? 'phpunit.xml' :
+      framework === 'vitest'                          ? 'vitest.config.ts / vite.config.ts' :
+      framework === 'jest'                            ? 'jest.config.js / jest.config.ts' :
+      'test runner config';
+
+    // ── Build a framework-specific run command ────────────────────────────────
+    let runCmd: string;
+    if (framework === 'phpunit' || framework === 'pest') {
+      const bin = framework === 'pest' ? 'pest' : 'phpunit';
+      if (pestHumanName) {
+        // Decoded Pest it() test — use artisan with the human-readable filter
+        const filterStr = pestHumanName.startsWith("it('")
+          ? pestHumanName.slice(4, -2)  // extract from it('...')
+          : pestHumanName;
+        runCmd = `php artisan test --filter "${filterStr}"`;
+      } else if (isFileEvent) {
+        runCmd = `php vendor/bin/${bin} ${testIdentity.testFile ?? displayName}`;
+      } else {
+        runCmd = `php vendor/bin/${bin} --filter '${method ?? displayName}'`;
+      }
+    } else if (framework === 'jest' || framework === 'vitest') {
+      if (isFileEvent) {
+        // For FILE findings: pass the path directly as a positional argument.
+        // --testNamePattern matches test *names*, not file paths — it would silently
+        // match nothing when given a file path string.
+        const filePath = testIdentity.testFile ?? displayName;
+        runCmd = framework === 'vitest'
+          ? `npx vitest run ${filePath}`  // `run` prevents watch mode
+          : `npx jest ${filePath}`;
+      } else {
+        // For CASE findings: -t / --testNamePattern filters by test name
+        runCmd = `npx ${framework} --testNamePattern '${method ?? displayName}'`;
+      }
+    } else {
+      runCmd = isFileEvent
+        ? `# Run test file: ${displayName}`
+        : `# Run test: ${displayName}`;
+    }
+
+    // ── "Check if it still exists" command ───────────────────────────────────
+    // For test FILES: check disk presence (grep for its own path is nonsensical).
+    // For test CASES: search for the test name string inside the test source tree.
+    const grepTerm = pestHumanName
+      ? (pestHumanName.startsWith("it('") ? pestHumanName.slice(4, -2) : pestHumanName)
+      : (method ?? displayName);
+    const existsCmd = isFileEvent
+      ? `ls ${testIdentity.testFile ?? displayName}`
+      : `grep -r '${grepTerm}' tests/`;
+
+    const titlePrefix = isFileEvent
+      ? 'Previously baselined test file not observed'
+      : 'Previously baselined test not observed';
+
+    return {
+      ruleId,
+      severity:    'medium',
+      category:    'evidence_continuity',
+      title:       `${titlePrefix}: ${displayName}`,
+      description: `The ${isFileEvent ? 'test file' : 'test case'} \`${displayName}\` was present in ` +
+                   `the approved baseline evidence but was not observed in the candidate run. ` +
+                   `This may mean the test was removed, renamed, skipped, excluded by ${configRef}, ` +
+                   `or the candidate run executed a different test subset.`,
+      recommendation:
+        `Verify this change is intentional:\n` +
+        `  1. Run the missing test directly:\n` +
+        `       ${runCmd}\n` +
+        `  2. Check if it still exists:\n` +
+        `       ${existsCmd}\n` +
+        `  3. Check whether ${configFile} excludes this path.\n` +
+        `  4. If intentional: re-baseline with:\n` +
+        `       tracegraph baseline create --reason "Test renamed/replaced"`,
+      testIdentity,
+    };
+  }
+
+  const eventLabel2 = eventLabel; // alias for clarity below
 
   // M5.2 — Route-level authorization middleware removed (more severe than a
   // function-level auth check because it gates every request to that route).
@@ -239,8 +402,8 @@ function classifyRemovedSignature(removed: SignatureChange): {
       ruleId:         RULES.MIDDLEWARE_REMOVED,
       severity:       'critical',
       category:       'security_authorization',
-      title:          `Authorization middleware removed: ${eventLabel}`,
-      description:    `A route-level authorization middleware "${eventLabel}" that guarded ` +
+      title:          `Authorization middleware removed: ${eventLabel2}`,
+      description:    `A route-level authorization middleware "${eventLabel2}" that guarded ` +
                       `"${removed.signature.routeMethod ?? ''} ${removed.signature.routePathPattern}" ` +
                       `in the baseline is absent in the candidate trace. Removing route middleware ` +
                       `exposes every request to that route to unauthenticated or unauthorized access.`,
@@ -253,8 +416,8 @@ function classifyRemovedSignature(removed: SignatureChange): {
       ruleId:         RULES.AUTHORIZATION_REMOVED,
       severity:       'critical',
       category:       'security_authorization',
-      title:          `Authorization check removed: ${eventLabel}`,
-      description:    `An authorization check "${eventLabel}" that was present in the baseline is no longer present in the candidate trace. This may indicate a security regression.`,
+      title:          `Authorization check removed: ${eventLabel2}`,
+      description:    `An authorization check "${eventLabel2}" that was present in the baseline is no longer present in the candidate trace. This may indicate a security regression.`,
       recommendation: 'Restore the authorization check or confirm this removal is intentional and safe.',
     };
   }
@@ -264,8 +427,8 @@ function classifyRemovedSignature(removed: SignatureChange): {
       ruleId:         RULES.VALIDATION_REMOVED,
       severity:       'high',
       category:       'behavior_change',
-      title:          `Validation step removed: ${eventLabel}`,
-      description:    `A validation step "${eventLabel}" present in the baseline is absent in the candidate trace. Input may no longer be validated before processing.`,
+      title:          `Validation step removed: ${eventLabel2}`,
+      description:    `A validation step "${eventLabel2}" present in the baseline is absent in the candidate trace. Input may no longer be validated before processing.`,
       recommendation: 'Verify validation is still performed (possibly in a different location) or restore the validation step.',
     };
   }
@@ -274,8 +437,8 @@ function classifyRemovedSignature(removed: SignatureChange): {
     ruleId:         RULES.BUSINESS_LOGIC_REMOVED,
     severity:       'medium',
     category:       'behavior_change',
-    title:          `Behaviour change: ${eventLabel} removed`,
-    description:    `The event "${eventLabel}" was present in the baseline but is absent in the candidate trace.`,
+    title:          `Behaviour change: ${eventLabel2} removed`,
+    description:    `The event "${eventLabel2}" was present in the baseline but is absent in the candidate trace.`,
     recommendation: 'Verify this change is intentional.',
   };
 }

@@ -17,13 +17,14 @@ import helmet  from 'helmet';
 import path    from 'path';
 import fs      from 'fs';
 
-import authRouter        from './api/auth';
-import runsRouter        from './api/runs';
-import baselinesRouter   from './api/baselines';
-import findingsRouter    from './api/findings';
+import authRouter         from './api/auth';
+import runsRouter         from './api/runs';
+import baselinesRouter    from './api/baselines';
+import findingsRouter     from './api/findings';
 import suppressionsRouter from './api/suppressions';
-import projectsRouter    from './api/projects';
-import { closeDb }       from './db/database';
+import projectsRouter     from './api/projects';
+import architectureRouter from './api/architecture';
+import { closeDb }        from './db/database';
 
 const app  = express();
 const PORT = parseInt(process.env['PORT'] ?? '3000', 10);
@@ -45,10 +46,11 @@ app.use('/api/v1/auth',    authRouter);
 app.use('/api/v1/runs',    runsRouter);
 app.use('/api/v1/projects', projectsRouter);
 
-// Nested routes: /api/v1/projects/:projectId/baselines|findings|suppressions
-app.use('/api/v1/projects/:projectId/baselines',   baselinesRouter);
-app.use('/api/v1/projects/:projectId/findings',    findingsRouter);
+// Nested routes: /api/v1/projects/:projectId/baselines|findings|suppressions|architecture
+app.use('/api/v1/projects/:projectId/baselines',    baselinesRouter);
+app.use('/api/v1/projects/:projectId/findings',     findingsRouter);
 app.use('/api/v1/projects/:projectId/suppressions', suppressionsRouter);
+app.use('/api/v1/projects/:projectId/architecture', architectureRouter);
 
 // ── Health check ──────────────────────────────────────────────────────────────
 

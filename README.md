@@ -4,13 +4,12 @@
 
 # TraceGraph
 
-AI-generated code needs to be kept on a leash. A thousand-file diff is not useful if the human still has to manually inspect every change to understand what broke, what shifted, or what quietly changed behavior. That is the new bottleneck in software development: not generating code, but reviewing it with confidence. The real challenge is making sure AI-generated changes do not introduce bugs, remove important safeguards, or deviate from the system's expected behavior.
+TraceGraph is a runtime assurance tool for AI-generated and human-written code. It runs alongside your existing tests, captures what the application actually did, and compares that behavior against approved baselines so reviewers can see exactly what changed before a release reaches production.
 
 > A test tells you whether an assertion passed.
-
 > TraceGraph shows you what the code actually did.
 
-TraceGraph captures what your code actually does at runtime, turns execution into an interactive behavior graph, and helps teams detect risky changes before software reaches production. It is designed for modern development workflows where code is written by humans, AI coding tools, or both, and where passing tests alone may not be enough to know whether a release is safe.
+It is designed for development workflows where code is written by humans, AI coding tools, or both, and where passing tests alone is not enough to know whether a release is safe.
 
 
 ## Core Feature
@@ -66,7 +65,7 @@ npx tracegraph compare
 Open an interactive behavior graph in your browser:
 
 ```bash
-npx tracegraph open --html
+npx tracegraph open --html .tracegraph/traces/*.trace.json
 ```
 
 Or use the faster onboarding path that walks you through setup interactively:
@@ -84,23 +83,24 @@ tracegraph run -- <test command>      # Capture runtime traces
 tracegraph baseline create            # Approve current behavior as baseline
 tracegraph compare                    # Diff latest run against baseline
 tracegraph report                     # Generate markdown / JSON / HTML report
-tracegraph open --html                # Self-contained offline HTML report
+tracegraph open --html <file>         # Self-contained offline HTML report
 
 # Onboarding
-tracegraph quick                      # Interactive guided setup
-tracegraph adopt                      # Analyse an existing project, suggest setup steps
+tracegraph quick                      # Zero-config demo — creates a sample project and opens the viewer
+tracegraph adopt                      # Adopt current runtime behaviour as the initial baseline for an existing codebase
 tracegraph init                       # Add tracegraph scripts to package.json
 tracegraph diagnose                   # Show capture level and improvement recommendations
 
 # Baselines and findings
 tracegraph baseline list              # List all baselines
 tracegraph baseline approve <id>      # Approve a specific baseline
-tracegraph baseline suggest-update    # AI-assisted baseline review
+tracegraph baseline suggest           # Suggest high-priority baselines from traces and static graph
+tracegraph baseline suggest-update    # AI-assisted review: safe to auto-approve vs. needs human review
 tracegraph finding list               # List all open findings
 tracegraph finding approve <id>       # Accept a specific finding
 tracegraph finding suppress <id>      # Suppress with optional evidence requirement
 tracegraph finding explain <id>       # Human-readable finding detail + recommendation
-tracegraph replay                     # Replay a previous trace through the current engine
+tracegraph replay                     # Re-execute recorded HTTP requests against a live server
 
 # Scenarios
 tracegraph scenario run <file>        # Run an HTTP scenario and write a TraceBundle
@@ -112,6 +112,18 @@ tracegraph coverage                   # Map git diff to runtime coverage
 tracegraph pack                       # Export prompt packs for Cursor / Claude / Copilot / MCP
 tracegraph testgen                    # Generate missing tests from uncovered changed functions
 
+# Static architecture analysis
+tracegraph scan                       # Risk scan without a baseline — uses static call graph
+tracegraph graph build                # Build a static call graph from source
+tracegraph graph status               # Show graph stats (nodes, edges, communities, god nodes)
+tracegraph graph open                 # Open static graph in browser
+tracegraph graph update               # Rebuild graph and refresh the index
+tracegraph graph communities          # List detected communities and cross-community edges
+tracegraph graph doctor               # Diagnose graph build quality
+tracegraph architecture baseline create   # Snapshot current graph as architecture baseline
+tracegraph architecture baseline status   # Show stored architecture baseline
+tracegraph architecture compare           # Diff current graph vs baseline; --fail-on-critical
+
 # Auditing external repositories
 tracegraph audit <github-url>         # Clone a GitHub repo, audit an open PR, report findings
 
@@ -120,6 +132,9 @@ tracegraph server start               # Start local Team Server
 tracegraph upload                     # Upload trace artifacts to Team Server
 tracegraph pull                       # Pull shared baselines and suppressions
 
+# MCP server
+tracegraph mcp start                  # Start MCP JSON-RPC 2.0 server for AI tool integration
+
 # Utilities
 tracegraph schema doctor              # Check artifact schema versions
 tracegraph baseline migrate           # Upgrade baseline schema versions
@@ -127,6 +142,8 @@ tracegraph import xdebug <file>       # Import a PHP Xdebug .xt trace file
 tracegraph ci-summary                 # Write GitHub Actions step summary
 tracegraph clean                      # Remove old run directories
 ```
+
+> See the [User Guide](GUIDE.md) for the full reference on every command, flag, and adapter.
 
 
 ## Capture Levels
@@ -146,6 +163,23 @@ Levels 3–5 are injected non-invasively via `NODE_OPTIONS` or the `--reporter` 
 
 The capture level appears in every trace artifact, CLI output, HTML report, and CI summary.
 
+## Assurance Levels
+
+TraceGraph computes an **assurance level** (0–5) for every compare run and coverage report, combining capture quality and baseline coverage:
+
+| Level | Label | What it means |
+|-------|-------|---------------|
+| 0 | No evidence | No traces captured or no baseline to compare against |
+| 1 | Static only | Static graph available; no runtime trace coverage |
+| 2 | Partial runtime | Runtime traces captured but no approved baselines |
+| 3 | Baseline-lite | Baselines present; static-graph only, no runtime baseline match |
+| 4 | Runtime baseline | Runtime baseline matched; captures below Level 5 |
+| 5 | Full assurance | Per-test Level 5 traces + runtime baseline matched |
+
+The assurance level is visible in the CI report and can gate CI via `tracegraph compare --min-assurance 4` (exits code 8 when level is too low).
+
+**Capture Depth, Evidence Assurance, and Architecture Quality are separate scales.** A run can have Capture Level 5 (per-test traces via Vitest) but Evidence Assurance Level 4 if it has a runtime baseline match but no static graph. Architecture Quality is tracked independently via `tracegraph architecture compare`. You can combine all three for maximum confidence.
+
 
 ## Language and Framework Support
 
@@ -162,9 +196,10 @@ NODE_OPTIONS='--require @tracegraph/trace-js/register-cjs' npm test
 # ESM hook — ESM-native modules (Level 4, non-invasive)
 NODE_OPTIONS='--import @tracegraph/trace-js/register' npm test
 
-# Manual wrappers (Level 2)
+# Manual wrappers (Level 2) — two equivalent signatures:
 import { traceFunction } from '@tracegraph/trace-js';
-const traced = traceFunction(myFunction, { name: 'myFunction' });
+const traced = traceFunction('MyService.myMethod', myFunction);      // name-first
+const traced = traceFunction(myFunction, { name: 'MyService.myMethod' }); // function-first
 ```
 
 Supported test runners:
@@ -178,8 +213,8 @@ Supported test runners:
 ### PHP / Laravel
 
 ```bash
-# Composer install
-composer require tracegraph/laravel
+# Composer install (--dev is recommended; TraceGraph should not run in production)
+composer require --dev tracegraph/laravel
 
 # Laravel auto-discovery registers TraceServiceProvider automatically
 # Adds: HTTP middleware, DB::listen, Gate hooks, Queue lifecycle
@@ -188,7 +223,7 @@ composer require tracegraph/laravel
 ```xml
 <!-- PHPUnit 10/11 — add to phpunit.xml for per-test traces (Level 5) -->
 <extensions>
-  <bootstrap class="Tracegraph\Laravel\Testing\TraceGraphPhpUnitExtension"/>
+  <extension class="Tracegraph\Laravel\Testing\TraceGraphPhpUnitExtension"/>
 </extensions>
 ```
 
@@ -259,80 +294,22 @@ Each finding has a stable fingerprint based on rule, route, class, and method �
 
 ## Approvals and Suppressions
 
-TraceGraph separates three distinct concepts:
+TraceGraph separates three concepts that must not collapse into one:
 
-```text
-Baseline approval  = updates expected behavior going forward.
-Finding approval   = accepts one specific finding instance.
-Suppression        = conditionally hides a recurring finding
-                     only while compensating evidence still exists.
-```
+- **Baseline approval** — updates expected behavior going forward for a route or test
+- **Finding approval** — accepts one specific finding instance without changing the baseline
+- **Suppression** — conditionally silences a recurring finding only while a compensating control (e.g. an auth check) is still present in the trace; reopens automatically if the control disappears
 
-A suppression with `requiresEvidence` is re-evaluated on every run. If the compensating control disappears, the finding reopens automatically:
+Suppression files are treated as security-sensitive: a PR that modifies `tracegraph.suppressions.json` triggers a `policy.suppressions_modified` finding that can require a designated reviewer to sign off.
 
-```json
-{
-  "ruleId": "security.authorization.middleware_removed",
-  "semanticTarget": {
-    "routeMethod": "PUT",
-    "routePathPattern": "/users/{id}/role"
-  },
-  "requiresEvidence": [
-    { "type": "authorization_check", "name": "RolePolicy.update" }
-  ],
-  "reason": "Authorization moved from middleware to policy",
-  "expiresAt": "2026-08-01"
-}
-```
-
-Suppression files are treated as security-sensitive. If a PR modifies `tracegraph.suppressions.json`, TraceGraph emits a distinct `policy.suppressions_modified` finding that can be gated on a designated reviewer.
-
-Batch operations for CI:
-
-```bash
-tracegraph finding approve --all --run-id <id>
-tracegraph finding suppress --all --reason "known regression"
-```
+See [User Guide §8](GUIDE.md) for the full approval and suppression workflow.
 
 
 ## Semantic Baselines
 
-Baselines store compact semantic signatures, not raw traces. They record which events occurred, what resources were touched, and what authorization checks were present — without capturing volatile values like IDs or timestamps:
+Baselines store compact semantic signatures of what the application did — which events occurred, what resources were touched, which authorization checks were present — without capturing volatile values like IDs or timestamps. The diff engine uses **multiset comparison** so it catches N+1 regressions and duplicate side effects that scalar presence checks miss.
 
-```json
-{
-  "schemaVersion": "tracegraph.baseline.v1",
-  "entrypoint": "POST /invoices",
-  "events": [
-    {
-      "signature": {
-        "eventType": "method_call",
-        "className": "InvoiceService",
-        "methodName": "create",
-        "role": "business_logic"
-      },
-      "count": 1
-    },
-    {
-      "signature": {
-        "eventType": "authorization_check",
-        "className": "InvoicePolicy",
-        "methodName": "create",
-        "role": "authorization"
-      },
-      "count": 1,
-      "critical": true
-    }
-  ],
-  "resources": [
-    { "type": "database_table", "key": "invoices", "operation": "write", "count": 1 }
-  ]
-}
-```
-
-Baselines are small enough to commit to git. Raw traces stay local and are pruned automatically.
-
-The diff engine uses **multiset comparison** to distinguish "called once" from "called three times" — catching N+1 regressions and duplicate side effects that scalar presence checks miss.
+Baselines are small enough to commit to git. Raw traces stay local and are pruned automatically. See [User Guide §8](GUIDE.md) for schema details and migration.
 
 
 ## VS Code Extension
@@ -418,6 +395,71 @@ tracegraph baseline suggest-update
 ```
 
 
+## Static Architecture Analysis
+
+TraceGraph can build a static call graph from your source tree and use it to:
+
+- **Scan for risk without a baseline** — identify god nodes, high blast-radius functions, and sensitive communities that lack test coverage
+- **Enrich runtime traces** — link runtime events to their static graph node so findings carry confidence scores and evidence sources
+- **Detect architecture drift** — compare the current graph against a committed architecture baseline and flag new cross-community edges
+
+```bash
+# Build the static call graph from source (optional — enriches all other commands)
+tracegraph graph build
+
+# Risk scan — no baseline required
+tracegraph scan
+# → Lists god nodes, untested high-risk nodes, and community coverage gaps
+
+# Suggest which baselines to create next (scores by blast radius, coverage, and assurance)
+tracegraph baseline suggest --top 10
+
+# Commit the current architecture as a baseline
+tracegraph architecture baseline create
+
+# Detect drift on every PR
+tracegraph architecture compare --fail-on-critical
+# exits 3 when a new cross-community edge points into a sensitive community
+```
+
+**What the static graph provides:**
+
+| Signal | Finding | Severity |
+|--------|---------|----------|
+| Node with high in-degree (god node) and no test trace | `architecture.god_node_untested` | High |
+| High blast-radius node changed without trace coverage | `architecture.high_blast_radius` | High |
+| Sensitive community (auth, payment) with no verified trace | `architecture.sensitive_community_unverified` | High |
+| New cross-community runtime call not in architecture baseline | `architecture.surprise_edge` | Medium–High |
+| New edge into a sensitive community | `architecture.sensitive_community_crossed` | High |
+
+Static graph findings include a `confidence` score and `evidenceSources` list (e.g. `["static_graph", "runtime_trace"]`) so the report clearly distinguishes inferred from verified findings.
+
+
+## MCP Server
+
+TraceGraph exposes an **MCP (Model Context Protocol) server** so AI tools can query the static graph and runtime traces directly:
+
+```bash
+# Start the MCP server (JSON-RPC 2.0 over stdin/stdout)
+tracegraph mcp start [--project-dir <path>] [--no-graph] [--no-traces] [--no-findings]
+```
+
+**Available MCP tools:**
+
+| Tool | Description |
+|------|-------------|
+| `tracegraph.graph.get_node` | Fetch a node from the static graph by symbol name |
+| `tracegraph.graph.get_neighbors` | Get direct callers and callees of a node |
+| `tracegraph.graph.get_community` | Get all nodes in a community |
+| `tracegraph.graph.get_god_nodes` | List god nodes by degree |
+| `tracegraph.graph.find_path` | Find the shortest call path between two nodes |
+| `tracegraph.trace.find_events_for_node` | Find runtime events matching a symbol name |
+| `tracegraph.coverage.get_uncovered_changed_nodes` | Get changed functions with no runtime trace coverage |
+| `tracegraph.findings.explain_with_architecture` | Explain a finding enriched with graph context |
+
+Each tool degrades gracefully when data is unavailable — no crashes, helpful messages instead.
+
+
 ## Auditing External Repositories
 
 `tracegraph audit` clones a GitHub repository, scores its open pull requests for behavioral risk, runs the test suite on both the base branch and the PR branch, compares runtime behavior, and generates a findings report — all non-invasively without modifying any tracked source files:
@@ -461,6 +503,8 @@ tracegraph pull --server https://your-team-server.internal
 ```
 
 The Team Server exposes a REST API with token authentication, stores artifacts in SQLite, and handles multi-project routing. Docker Compose setup is provided out of the box.
+
+The **architecture dashboard** tracks graph snapshots over time, computes an architecture debt score `(godNodeRatio × 60 + crossEdgeDensity × 40) × 100`, and exposes a drift history API so teams can see how the static graph evolves across releases. Run `tracegraph compare --upload` to upload both traces and the current architecture snapshot automatically.
 
 
 ## CI Integration
@@ -525,6 +569,7 @@ Exit codes from `tracegraph compare`:
 | 4 | Suppressions file modified — policy review required |
 | 5 | Schema version mismatch |
 | 6 | Capture level too low |
+| 8 | Assurance level below minimum (`--min-assurance`) |
 
 
 ## Async and Concurrent Execution
@@ -602,6 +647,7 @@ TraceGraph
 │   ├── run / compare / baseline / report / open
 │   ├── finding / scenario / coverage / pack / testgen
 │   ├── audit / quick / adopt / init / diagnose
+│   ├── scan / graph / architecture / mcp
 │   ├── server / upload / pull
 │   └── schema / clean / replay / ci-summary
 │
@@ -624,6 +670,15 @@ TraceGraph
 │   ├── analyseTraceFindings — N+1, duplicate side effects, missing tx
 │   └── renderGraphSvg — pure SVG (no browser dependency)
 │
+├── Static Graph (packages/static-graph)
+│   ├── Graph runner — builds static call graph from source
+│   ├── Normaliser — community detection, god-node scoring, blast radius
+│   ├── Indexer — symbol→node lookup, neighbour queries
+│   ├── Findings — god_node_untested, high_blast_radius, surprise_edge, community drift
+│   ├── Assurance — computeAssuranceLevel() (levels 0–5)
+│   ├── Baseline suggest — priority-scored baseline recommendation engine
+│   └── Architecture baseline — create / diff / compare cross-community edges
+│
 ├── Trace Sanitizer (packages/trace-sanitizer)
 │   └── Redaction, depth limits, UUID/timestamp normalisation
 │
@@ -642,7 +697,8 @@ TraceGraph
 │   └── Markdown / JSON / GitHub step summary renderer
 │
 ├── Team Server (packages/team-server)
-│   └── REST API + SQLite + Docker Compose
+│   ├── REST API + SQLite + Docker Compose
+│   └── Architecture dashboard — snapshot upload, drift history, debt score
 │
 └── Viewers
     ├── apps/webview        — React graph, timeline, error path (bundled into CLI)
@@ -670,7 +726,19 @@ TraceGraph helps answer questions like:
 
 ## What TraceGraph Is Not
 
-TraceGraph is not a replacement for unit tests, integration tests, static analysis, code review, formal verification, or observability tools. It complements all of these by adding runtime behavior evidence to the development and release process.
+TraceGraph is not a replacement for unit tests, integration tests, code review, formal verification, or observability tools. It is also not a traditional static analyser — runtime evidence is the source of truth, and static graph intelligence exists to enrich runtime findings, not replace them. TraceGraph complements all of the above by adding runtime behavior evidence to the development and release process.
+
+
+## Documentation
+
+| Document | What it covers |
+|----------|---------------|
+| [User Guide](GUIDE.md) | Every command, flag, adapter, CI workflow, configuration, troubleshooting |
+| [GUIDE.md §7](GUIDE.md) | Full CLI command reference (all 26 commands) |
+| [GUIDE.md §12](GUIDE.md) | Static architecture analysis and assurance levels |
+| [GUIDE.md §13](GUIDE.md) | MCP server setup and tools |
+| [GUIDE.md §15](GUIDE.md) | CI integration and GitHub Actions |
+| [GUIDE.md §18](GUIDE.md) | Full configuration reference |
 
 
 ## Contributing

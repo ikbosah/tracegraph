@@ -34,9 +34,13 @@ const SEVERITY_EMOJI: Record<FindingSeverity, string> = {
 };
 
 export type AdoptOptions = {
-  dryRun?:     boolean;
-  reason?:     string;
-  approvedBy?: string;
+  dryRun?:         boolean;
+  reason?:         string;
+  approvedBy?:     string;
+  /** G1: Build static graph and append architecture baseline to BASELINE_ASSUMPTIONS.md. */
+  withStaticGraph?: boolean;
+  /** G1: Skip static graph step even if staticGraph.enabled is set in config. */
+  skipGraph?:       boolean;
 };
 
 export function adoptCommand(options: AdoptOptions): number {
@@ -210,7 +214,189 @@ export function adoptCommand(options: AdoptOptions): number {
     `  See: .tracegraph/BASELINE_ASSUMPTIONS.md\n\n`,
   );
 
+  // ── G1: Optional static graph build ─────────────────────────────────────
+  if (!options.skipGraph) {
+    const shouldBuildGraph = options.withStaticGraph ?? shouldOfferStaticGraph(cwd);
+    if (shouldBuildGraph) {
+      appendStaticGraphToAdoption(cwd, tracegraphDir, approvedBy);
+    }
+  }
+
   return EXIT_CODES.SUCCESS;
+}
+
+// ─── G1: Static graph integration ─────────────────────────────────────────────
+
+/**
+ * Check if static graph should be offered / built automatically.
+ * True when: staticGraph.enabled is set in config, OR --with-static-graph flag used.
+ * (Interactive prompt is handled in the CLI layer, not here.)
+ */
+function shouldOfferStaticGraph(cwd: string): boolean {
+  try {
+    const configPath = path.join(cwd, 'tracegraph.config.json');
+    if (!fs.existsSync(configPath)) return false;
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8')) as { staticGraph?: { enabled?: boolean } };
+    return config.staticGraph?.enabled === true;
+  } catch { return false; }
+}
+
+/**
+ * G4 — Build the static graph (if Graphify is available), create the
+ * architecture-baseline.json, and append a rich architecture section to
+ * BASELINE_ASSUMPTIONS.md including god nodes, sensitive communities,
+ * cross-community edge count, assurance level, and top baseline suggestions.
+ */
+function appendStaticGraphToAdoption(
+  cwd: string,
+  tracegraphDir: string,
+  approvedBy: string,
+): void {
+  // Lazy-import to keep adopt.ts compilable without static-graph installed
+  let sg: typeof import('@tracegraph/static-graph') | null = null;
+  let gc: typeof import('./graph') | null = null;
+
+  try {
+    sg = require('@tracegraph/static-graph') as typeof import('@tracegraph/static-graph');
+    gc = require('./graph') as typeof import('./graph');
+  } catch {
+    process.stderr.write(
+      '[tracegraph] @tracegraph/static-graph not available — skipping graph build.\n',
+    );
+    return;
+  }
+
+  process.stdout.write('[tracegraph] Building static architecture graph...\n');
+  const buildResult = gc.graphBuildCommand({ quiet: false });
+
+  if (buildResult !== 0) {
+    process.stderr.write(
+      '[tracegraph] Static graph build failed — adoption complete without architecture section.\n',
+    );
+    return;
+  }
+
+  const meta  = sg.loadGraphMetadata(cwd);
+  const graph = sg.loadNormalizedGraph(cwd);
+  const index = sg.loadOrRebuildGraphIndex(cwd);
+
+  if (!meta || !graph || !index) return;
+
+  // ── TG4.2: Create and write architecture-baseline.json ──────────────────
+  const baseline = sg.createArchitectureBaseline(graph, index, cwd, { createdBy: approvedBy });
+  sg.writeArchitectureBaseline(baseline, cwd);
+  process.stdout.write(
+    '[tracegraph] Architecture baseline written: ' +
+    '.tracegraph/static-graph/architecture-baseline.json\n',
+  );
+
+  // ── TG4.1: Get top 5 baseline suggestions (graceful degradation) ─────────
+  const tracesDir   = path.join(tracegraphDir, 'traces');
+  const baselinesDir = path.join(tracegraphDir, 'baselines');
+  const scenariosDir = path.join(tracegraphDir, 'scenarios');
+  type ScoredEntry = { testId: string; label: string; priority: string; score: number; reasons: string[] };
+  let topSuggestions: ScoredEntry[] = [];
+  try {
+    topSuggestions = (sg.suggestBaselines({
+      tracesDir,
+      baselinesDir,
+      scenariosDir,
+      graph,
+      index,
+      top: 5,
+    }) as ScoredEntry[]);
+  } catch { /* non-fatal — suggestions are a bonus */ }
+
+  // ── Compute assurance level ───────────────────────────────────────────────
+  const assurance = sg.computeAssuranceLevel({
+    staticGraphAvailable:     true,
+    riskClassified:           true,
+    runtimeTraceAvailable:    fs.existsSync(tracesDir),
+    runtimeBaselineAvailable: fs.existsSync(baselinesDir) &&
+                              fs.readdirSync(baselinesDir).some((f) => f.endsWith('.baseline.json')),
+    contractAvailable:        false,
+  });
+
+  // ── Build architecture section ────────────────────────────────────────────
+  const godNodes    = [...index.godNodes.values()].slice(0, 20);
+  const communities = [...graph.communities].sort((a, b) => b.size - a.size).slice(0, 10);
+  const sensitive   = graph.communities.filter((c) => c.isSensitive);
+
+  const section: string[] = [
+    '',
+    '## Architecture Baseline',
+    '',
+    `Graph provider: Graphify ${meta.graphifyVersion} | Commit: ${meta.commit.slice(0, 8)}`,
+    `Nodes: ${meta.nodeCount.toLocaleString()} | Edges: ${meta.edgeCount.toLocaleString()} | Communities: ${meta.communityCount} | God nodes: ${meta.godNodeCount} | Cross-community edges: ${baseline.crossCommunityEdges.length}`,
+    `Assurance: Level ${assurance.level} — ${assurance.label}`,
+    '',
+  ];
+
+  if (godNodes.length > 0) {
+    section.push(
+      '### God Nodes (top 5% centrality — require runtime evidence when changed)',
+      '',
+      '| Symbol | Community | Centrality |',
+      '|--------|-----------|------------|',
+    );
+    for (const n of godNodes) {
+      section.push(
+        `| ${n.symbolName} | ${n.communityLabel ?? '—'} | top ${100 - n.centralityPercentile}% |`,
+      );
+    }
+    section.push('');
+  }
+
+  if (sensitive.length > 0) {
+    section.push(
+      '### Sensitive Communities',
+      `Elevated finding severity on new edges into: ${sensitive.map((c) => c.label).join(', ')}`,
+      '',
+    );
+  }
+
+  if (communities.length > 0) {
+    section.push(
+      '### Top Communities',
+      '',
+      '| Community | Size | Sensitive |',
+      '|-----------|------|-----------|',
+    );
+    for (const c of communities) {
+      section.push(`| ${c.label} | ${c.size} | ${c.isSensitive ? '🔒 Yes' : 'No'} |`);
+    }
+    section.push('');
+  }
+
+  section.push('### Recommended Next Baselines', '');
+  if (topSuggestions.length > 0) {
+    section.push('Priority order for creating runtime baselines:', '');
+    for (const s of topSuggestions) {
+      section.push(`- **${s.priority}** \`${s.testId}\` — ${s.label} (score: ${s.score})`);
+    }
+    section.push('', 'Run `tracegraph baseline suggest` for the full ranked list.');
+  } else {
+    section.push('Run `tracegraph baseline suggest` for a priority-ordered plan.');
+  }
+
+  section.push('', '---', '*Generated by `tracegraph adopt --with-static-graph`*', '');
+
+  const assumptionsPath = path.join(tracegraphDir, 'BASELINE_ASSUMPTIONS.md');
+  try {
+    const existing = fs.existsSync(assumptionsPath)
+      ? fs.readFileSync(assumptionsPath, 'utf8')
+      : '';
+    fs.writeFileSync(
+      assumptionsPath,
+      existing.trimEnd() + '\n' + section.join('\n'),
+      'utf8',
+    );
+    process.stdout.write(
+      '[tracegraph] ✅ Architecture section appended to .tracegraph/BASELINE_ASSUMPTIONS.md\n',
+    );
+  } catch (err) {
+    process.stderr.write(`[tracegraph] Could not update BASELINE_ASSUMPTIONS.md: ${String(err)}\n`);
+  }
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

@@ -1,0 +1,182 @@
+#!/usr/bin/env node
+/**
+ * Mock graphify CLI — for TraceGraph G-series integration testing.
+ *
+ * Behaviour:
+ *   graphify --version          → prints version string
+ *   graphify .  (or any path)   → writes graph.json to the current directory
+ *
+ * The generated graph varies based on whether a .tracegraph/static-graph/
+ * directory already exists in CWD (PR branch run), producing minor drift so
+ * that `architecture compare` has something to report.
+ */
+'use strict';
+
+const fs   = require('fs');
+const path = require('path');
+
+const args = process.argv.slice(2);
+
+// ── --version ─────────────────────────────────────────────────────────────────
+if (args.includes('--version')) {
+  process.stdout.write('graphify 0.8.3\n');
+  process.exit(0);
+}
+
+// ── Detect whether this is the PR-branch run ──────────────────────────────────
+// If a baseline already exists we know we're on the PR branch → add drift.
+const baselineExists = fs.existsSync(
+  path.join(process.cwd(), '.tracegraph', 'static-graph', 'architecture-baseline.json'),
+);
+
+// ── Build graph payload ───────────────────────────────────────────────────────
+
+const BASE_NODES = [
+  // Community 0 — auth
+  { id: 'n1',  name: 'authenticate',       qualified_name: 'auth.authenticate',        type: 'function', file: 'src/auth/authenticate.ts',       line: 12,  community_id: 0, community_label: 'auth',     degree: 8,  centrality: 0.72, provenance: 'EXTRACTED' },
+  { id: 'n2',  name: 'validateToken',      qualified_name: 'auth.validateToken',       type: 'function', file: 'src/auth/token.ts',               line: 34,  community_id: 0, community_label: 'auth',     degree: 6,  centrality: 0.58, provenance: 'EXTRACTED' },
+  { id: 'n3',  name: 'refreshSession',     qualified_name: 'auth.refreshSession',      type: 'function', file: 'src/auth/session.ts',             line: 55,  community_id: 0, community_label: 'auth',     degree: 4,  centrality: 0.41, provenance: 'EXTRACTED' },
+  { id: 'n4',  name: 'AuthMiddleware',     qualified_name: 'auth.AuthMiddleware',      type: 'class',    file: 'src/auth/middleware.ts',          line: 10,  community_id: 0, community_label: 'auth',     degree: 7,  centrality: 0.65, provenance: 'EXTRACTED' },
+
+  // Community 1 — payments
+  { id: 'n5',  name: 'chargeCard',         qualified_name: 'payments.chargeCard',      type: 'function', file: 'src/payments/charge.ts',          line: 22,  community_id: 1, community_label: 'payments', degree: 9,  centrality: 0.81, provenance: 'EXTRACTED' },
+  { id: 'n6',  name: 'refundTransaction',  qualified_name: 'payments.refundTransaction', type: 'function', file: 'src/payments/refund.ts',       line: 18,  community_id: 1, community_label: 'payments', degree: 5,  centrality: 0.49, provenance: 'EXTRACTED' },
+  { id: 'n7',  name: 'validateCard',       qualified_name: 'payments.validateCard',    type: 'function', file: 'src/payments/validation.ts',      line: 44,  community_id: 1, community_label: 'payments', degree: 6,  centrality: 0.55, provenance: 'EXTRACTED' },
+  { id: 'n8',  name: 'PaymentGateway',     qualified_name: 'payments.PaymentGateway',  type: 'class',    file: 'src/payments/gateway.ts',         line: 8,   community_id: 1, community_label: 'payments', degree: 12, centrality: 0.88, provenance: 'EXTRACTED' },
+
+  // Community 2 — api / routing
+  { id: 'n9',  name: 'router',             qualified_name: 'api.router',               type: 'module',   file: 'src/api/router.ts',               line: 1,   community_id: 2, community_label: 'api',      degree: 15, centrality: 0.91, provenance: 'EXTRACTED' },
+  { id: 'n10', name: 'handleRequest',      qualified_name: 'api.handleRequest',        type: 'function', file: 'src/api/handler.ts',              line: 30,  community_id: 2, community_label: 'api',      degree: 10, centrality: 0.76, provenance: 'EXTRACTED' },
+  { id: 'n11', name: 'parseBody',          qualified_name: 'api.parseBody',            type: 'function', file: 'src/api/parser.ts',               line: 14,  community_id: 2, community_label: 'api',      degree: 7,  centrality: 0.60, provenance: 'EXTRACTED' },
+  { id: 'n12', name: 'sendResponse',       qualified_name: 'api.sendResponse',         type: 'function', file: 'src/api/response.ts',             line: 8,   community_id: 2, community_label: 'api',      degree: 8,  centrality: 0.63, provenance: 'EXTRACTED' },
+
+  // Community 3 — data / db
+  { id: 'n13', name: 'queryUser',          qualified_name: 'db.queryUser',             type: 'function', file: 'src/db/user-repo.ts',             line: 20,  community_id: 3, community_label: 'data',     degree: 6,  centrality: 0.53, provenance: 'EXTRACTED' },
+  { id: 'n14', name: 'saveOrder',          qualified_name: 'db.saveOrder',             type: 'function', file: 'src/db/order-repo.ts',            line: 35,  community_id: 3, community_label: 'data',     degree: 5,  centrality: 0.47, provenance: 'EXTRACTED' },
+  { id: 'n15', name: 'getTransaction',     qualified_name: 'db.getTransaction',        type: 'function', file: 'src/db/transaction-repo.ts',      line: 28,  community_id: 3, community_label: 'data',     degree: 4,  centrality: 0.39, provenance: 'EXTRACTED' },
+  { id: 'n16', name: 'DatabasePool',       qualified_name: 'db.DatabasePool',          type: 'class',    file: 'src/db/pool.ts',                  line: 5,   community_id: 3, community_label: 'data',     degree: 9,  centrality: 0.70, provenance: 'EXTRACTED' },
+
+  // God node (high degree, bridges all communities)
+  { id: 'n17', name: 'AppController',      qualified_name: 'core.AppController',       type: 'class',    file: 'src/app.ts',                      line: 1,   community_id: 2, community_label: 'api',      degree: 28, centrality: 0.97, provenance: 'EXTRACTED' },
+
+  // Community 4 — notifications
+  { id: 'n18', name: 'sendEmail',          qualified_name: 'notify.sendEmail',         type: 'function', file: 'src/notify/email.ts',             line: 15,  community_id: 4, community_label: 'notify',   degree: 4,  centrality: 0.35, provenance: 'EXTRACTED' },
+  { id: 'n19', name: 'sendSMS',            qualified_name: 'notify.sendSMS',           type: 'function', file: 'src/notify/sms.ts',               line: 10,  community_id: 4, community_label: 'notify',   degree: 3,  centrality: 0.28, provenance: 'EXTRACTED' },
+  { id: 'n20', name: 'NotificationQueue',  qualified_name: 'notify.NotificationQueue', type: 'class',    file: 'src/notify/queue.ts',             line: 3,   community_id: 4, community_label: 'notify',   degree: 6,  centrality: 0.50, provenance: 'EXTRACTED' },
+
+  // Shared utilities
+  { id: 'n21', name: 'logger',             qualified_name: 'utils.logger',             type: 'module',   file: 'src/utils/logger.ts',             line: 1,   community_id: 2, community_label: 'api',      degree: 20, centrality: 0.93, provenance: 'EXTRACTED' },
+  { id: 'n22', name: 'config',             qualified_name: 'utils.config',             type: 'module',   file: 'src/utils/config.ts',             line: 1,   community_id: 2, community_label: 'api',      degree: 18, centrality: 0.89, provenance: 'EXTRACTED' },
+  { id: 'n23', name: 'errorHandler',       qualified_name: 'utils.errorHandler',       type: 'function', file: 'src/utils/errors.ts',             line: 22,  community_id: 2, community_label: 'api',      degree: 7,  centrality: 0.57, provenance: 'EXTRACTED' },
+  { id: 'n24', name: 'cache',              qualified_name: 'utils.cache',              type: 'module',   file: 'src/utils/cache.ts',              line: 1,   community_id: 3, community_label: 'data',     degree: 8,  centrality: 0.62, provenance: 'EXTRACTED' },
+  { id: 'n25', name: 'metrics',            qualified_name: 'utils.metrics',            type: 'module',   file: 'src/utils/metrics.ts',            line: 1,   community_id: 2, community_label: 'api',      degree: 5,  centrality: 0.44, provenance: 'EXTRACTED' },
+];
+
+const BASE_EDGES = [
+  // auth internal
+  { source: 'n4',  target: 'n1',  type: 'calls',   weight: 1.0, provenance: 'EXTRACTED' },
+  { source: 'n4',  target: 'n2',  type: 'calls',   weight: 1.0, provenance: 'EXTRACTED' },
+  { source: 'n1',  target: 'n2',  type: 'calls',   weight: 0.9, provenance: 'EXTRACTED' },
+  { source: 'n1',  target: 'n3',  type: 'calls',   weight: 0.7, provenance: 'EXTRACTED' },
+
+  // payments internal
+  { source: 'n8',  target: 'n5',  type: 'calls',   weight: 1.0, provenance: 'EXTRACTED' },
+  { source: 'n8',  target: 'n7',  type: 'calls',   weight: 1.0, provenance: 'EXTRACTED' },
+  { source: 'n5',  target: 'n7',  type: 'calls',   weight: 0.8, provenance: 'EXTRACTED' },
+  { source: 'n6',  target: 'n15', type: 'calls',   weight: 0.6, provenance: 'EXTRACTED' },
+
+  // api internal
+  { source: 'n9',  target: 'n10', type: 'calls',   weight: 1.0, provenance: 'EXTRACTED' },
+  { source: 'n10', target: 'n11', type: 'calls',   weight: 0.9, provenance: 'EXTRACTED' },
+  { source: 'n10', target: 'n12', type: 'calls',   weight: 0.9, provenance: 'EXTRACTED' },
+
+  // data internal
+  { source: 'n16', target: 'n13', type: 'calls',   weight: 1.0, provenance: 'EXTRACTED' },
+  { source: 'n16', target: 'n14', type: 'calls',   weight: 1.0, provenance: 'EXTRACTED' },
+  { source: 'n16', target: 'n15', type: 'calls',   weight: 1.0, provenance: 'EXTRACTED' },
+
+  // notify internal
+  { source: 'n20', target: 'n18', type: 'calls',   weight: 0.8, provenance: 'EXTRACTED' },
+  { source: 'n20', target: 'n19', type: 'calls',   weight: 0.7, provenance: 'EXTRACTED' },
+
+  // cross-community (expected / approved)
+  { source: 'n17', target: 'n4',  type: 'calls',   weight: 1.0, provenance: 'EXTRACTED' },  // AppController → auth
+  { source: 'n17', target: 'n8',  type: 'calls',   weight: 1.0, provenance: 'EXTRACTED' },  // AppController → payments
+  { source: 'n17', target: 'n9',  type: 'calls',   weight: 1.0, provenance: 'EXTRACTED' },  // AppController → router
+  { source: 'n17', target: 'n16', type: 'calls',   weight: 1.0, provenance: 'EXTRACTED' },  // AppController → db
+  { source: 'n17', target: 'n20', type: 'calls',   weight: 0.9, provenance: 'EXTRACTED' },  // AppController → notify
+  { source: 'n10', target: 'n4',  type: 'calls',   weight: 0.9, provenance: 'EXTRACTED' },  // handleRequest → auth
+  { source: 'n10', target: 'n13', type: 'calls',   weight: 0.8, provenance: 'EXTRACTED' },  // handleRequest → db
+
+  // utils used everywhere
+  { source: 'n10', target: 'n21', type: 'imports', weight: 0.7, provenance: 'EXTRACTED' },
+  { source: 'n8',  target: 'n21', type: 'imports', weight: 0.7, provenance: 'EXTRACTED' },
+  { source: 'n16', target: 'n24', type: 'calls',   weight: 0.8, provenance: 'EXTRACTED' },
+  { source: 'n5',  target: 'n23', type: 'calls',   weight: 0.6, provenance: 'EXTRACTED' },
+  { source: 'n17', target: 'n22', type: 'imports', weight: 1.0, provenance: 'EXTRACTED' },
+  { source: 'n10', target: 'n25', type: 'calls',   weight: 0.5, provenance: 'EXTRACTED' },
+];
+
+const BASE_COMMUNITIES = [
+  { id: 0, label: 'auth',     size: 4, members: ['n1', 'n2', 'n3', 'n4'] },
+  { id: 1, label: 'payments', size: 4, members: ['n5', 'n6', 'n7', 'n8'] },
+  { id: 2, label: 'api',      size: 8, members: ['n9', 'n10', 'n11', 'n12', 'n17', 'n21', 'n22', 'n25'] },
+  { id: 3, label: 'data',     size: 5, members: ['n13', 'n14', 'n15', 'n16', 'n24'] },
+  { id: 4, label: 'notify',   size: 3, members: ['n18', 'n19', 'n20'] },
+];
+
+// ── PR-branch drift: 2 new nodes + 1 new cross-community edge ────────────────
+const PR_EXTRA_NODES = [
+  {
+    id: 'n26', name: 'exportUserData', qualified_name: 'data.exportUserData',
+    type: 'function', file: 'src/db/export.ts', line: 10,
+    community_id: 3, community_label: 'data', degree: 3, centrality: 0.28, provenance: 'EXTRACTED',
+  },
+  {
+    // New god node — high degree, added in PR, touches payments from api directly
+    id: 'n27', name: 'BillingController', qualified_name: 'api.BillingController',
+    type: 'class', file: 'src/api/billing.ts', line: 1,
+    community_id: 2, community_label: 'api', degree: 22, centrality: 0.94, provenance: 'EXTRACTED',
+  },
+];
+
+const PR_EXTRA_EDGES = [
+  { source: 'n27', target: 'n5',  type: 'calls', weight: 1.0, provenance: 'EXTRACTED' },  // NEW cross: api→payments
+  { source: 'n27', target: 'n13', type: 'calls', weight: 0.9, provenance: 'EXTRACTED' },  // cross: api→data
+  { source: 'n27', target: 'n21', type: 'imports', weight: 0.8, provenance: 'EXTRACTED' },
+  { source: 'n10', target: 'n26', type: 'calls', weight: 0.5, provenance: 'EXTRACTED' },  // NEW cross: api→data
+];
+
+const PR_COMMUNITIES = BASE_COMMUNITIES.map(c => {
+  if (c.id === 2) return { ...c, size: c.size + 1, members: [...c.members, 'n27'] };
+  if (c.id === 3) return { ...c, size: c.size + 1, members: [...c.members, 'n26'] };
+  return c;
+});
+
+// ── Assemble final graph ──────────────────────────────────────────────────────
+const nodes      = baselineExists ? [...BASE_NODES, ...PR_EXTRA_NODES] : BASE_NODES;
+const edges      = baselineExists ? [...BASE_EDGES, ...PR_EXTRA_EDGES]  : BASE_EDGES;
+const communities = baselineExists ? PR_COMMUNITIES : BASE_COMMUNITIES;
+
+const graph = {
+  version: '1',
+  metadata: {
+    generatedAt:    new Date().toISOString(),
+    tool:           'graphify',
+    toolVersion:    '0.8.3',
+    projectPath:    process.cwd(),
+    language:       'typescript',
+    isPrBranch:     baselineExists,
+  },
+  nodes,
+  edges,
+  communities,
+};
+
+// Write graph.json to CWD
+const outPath = path.join(process.cwd(), 'graph.json');
+fs.writeFileSync(outPath, JSON.stringify(graph, null, 2) + '\n', 'utf8');
+
+process.stderr.write(`graphify: analysed ${nodes.length} nodes, ${edges.length} edges, ${communities.length} communities\n`);
+process.stderr.write(`graphify: output written to graph.json\n`);
+process.exit(0);

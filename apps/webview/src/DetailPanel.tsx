@@ -228,6 +228,65 @@ export function DetailPanel({ node, allEvents, onOpenSource }: DetailPanelProps)
         </div>
       )}
 
+      {/* Static Architecture (G2) */}
+      {event.static && (
+        <div className="detail-section detail-section--static">
+          <div className="detail-section-title" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            Static Architecture
+            {event.static.isGodNode && (
+              <span
+                className="god-node-badge"
+                title="God node: top centrality in the static call graph"
+                style={{
+                  fontSize: 10,
+                  padding: '1px 5px',
+                  borderRadius: 4,
+                  background: '#f59e0b30',
+                  color: '#f59e0b',
+                  fontWeight: 600,
+                }}
+              >
+                ⚡ God node
+              </span>
+            )}
+          </div>
+          {event.static.communityLabel && (
+            <KVRow k="Community" v={event.static.communityLabel} />
+          )}
+          {event.static.centralityPercentile != null && (
+            <KVRow
+              k="Centrality"
+              v={`top ${100 - event.static.centralityPercentile}%`}
+            />
+          )}
+          {event.static.degree != null && (
+            <KVRow k="Degree" v={String(event.static.degree)} />
+          )}
+          {event.static.docstring && (
+            <KVRow
+              k="Docstring"
+              v={
+                <span style={{ whiteSpace: 'pre-wrap', fontSize: 11 }}>
+                  {event.static.docstring}
+                </span>
+              }
+            />
+          )}
+          {event.static.symbolName && event.static.symbolName !== event.name && (
+            <KVRow
+              k="Symbol"
+              v={<code style={{ fontSize: 10 }}>{event.static.symbolName}</code>}
+            />
+          )}
+          {event.static.matchConfidence != null && (
+            <KVRow
+              k="Match confidence"
+              v={`${(event.static.matchConfidence * 100).toFixed(0)}%`}
+            />
+          )}
+        </div>
+      )}
+
       {/* Metadata */}
       {event.metadata && Object.keys(event.metadata).length > 0 && (
         <div className="detail-section">

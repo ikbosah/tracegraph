@@ -6,17 +6,20 @@
 // ─── Schema versions ─────────────────────────────────────────────────────────
 
 export const SCHEMA_VERSIONS = {
-  trace:           'tracegraph.trace.v1',
-  event:           'tracegraph.event.v1',
-  baseline:        'tracegraph.baseline.v1',
-  bundle:          'tracegraph.bundle.v1',
-  report:          'tracegraph.report.v1',
-  diff:            'tracegraph.diff.v1',
-  suppression:     'tracegraph.suppressions.v1',
-  findingApproval: 'tracegraph.finding-approvals.v1',
-  scenario:        'tracegraph.scenario.v1',
-  index:           'tracegraph.index.v1',
-  coverage:        'tracegraph.coverage.v1',
+  trace:                'tracegraph.trace.v1',
+  event:                'tracegraph.event.v1',
+  baseline:             'tracegraph.baseline.v1',
+  bundle:               'tracegraph.bundle.v1',
+  report:               'tracegraph.report.v1',
+  diff:                 'tracegraph.diff.v1',
+  suppression:          'tracegraph.suppressions.v1',
+  findingApproval:      'tracegraph.finding-approvals.v1',
+  scenario:             'tracegraph.scenario.v1',
+  index:                'tracegraph.index.v1',
+  coverage:             'tracegraph.coverage.v1',
+  // G-series: Static Architecture Intelligence
+  staticGraph:          'tracegraph.static-graph.v1',
+  architectureBaseline: 'tracegraph.architecture-baseline.v1',
 } as const;
 
 export type SchemaVersions = typeof SCHEMA_VERSIONS;
@@ -172,6 +175,14 @@ export type TraceEvent = {
 
   tags?: string[];
   metadata?: Record<string, unknown>;
+
+  /**
+   * G2: Static architecture metadata attached during post-run enrichment.
+   * Never set at capture time — only written by the static-graph enricher.
+   * Present only when a static graph exists and the event matched a static
+   * node above minMatchConfidence.
+   */
+  static?: StaticNodeMeta;
 };
 
 // ─── DetailStreams (Xdebug enrichment) ───────────────────────────────────────
@@ -277,7 +288,9 @@ export type EventRole =
   | 'authorization'
   | 'business_logic'
   | 'db'
-  | 'external_call';
+  | 'external_call'
+  /** G6: test_file / test_run events emitted by PHPUnit/Jest test reporters. */
+  | 'test_artifact';
 
 export type SemanticSignature = {
   eventType: string;
@@ -346,7 +359,15 @@ export type FindingCategory =
   | 'security_mass_assignment'
   | 'performance'
   | 'data_integrity'
-  | 'tracegraph_policy_change';
+  | 'tracegraph_policy_change'
+  // G-series: static architecture findings
+  | 'architecture_risk'       // god node, blast radius, surprise edge
+  | 'architecture_inferred'   // inferred missing auth / expected path violated
+  // G6: evidence continuity — test/trace evidence expected but not observed
+  | 'evidence_continuity'
+  // G7: audit self-diagnostics — graph quality, capture level drop
+  | 'audit_quality'
+  ;
 
 /** IMP-3.3: Remediation guidance attached to a Finding. */
 export type RemediationSnippet = {
@@ -389,6 +410,28 @@ export type Finding = {
    * Set when the finding is associated with a specific DB table or resource.
    */
   resource?: string;
+
+  // ── G-series fields (backwards-compatible — all optional) ─────────────────
+
+  /**
+   * G-series: how confident TraceGraph is that this finding is correct.
+   * 1.00 = runtime baseline comparison (certain).
+   * < 1.00 = static or inferred evidence.
+   * Omitted for existing runtime-baseline findings (implicitly 1.00).
+   */
+  confidence?: number;
+
+  /**
+   * G-series: the evidence sources that produced this finding.
+   * A finding backed by both a static graph and a coverage gap has two sources.
+   */
+  evidenceSources?: FindingEvidenceSource[];
+
+  /**
+   * G6: canonical test identity for evidence_continuity findings.
+   * Populated when the removed event was a test_file or test_run artifact.
+   */
+  testIdentity?: TestIdentity;
 };
 
 export type FindingFingerprintInput = {
@@ -465,6 +508,15 @@ export type TracegraphConfig = {
   analytics?: {
     optIn?: boolean;
   };
+  /** G1: Static graph enrichment configuration. */
+  staticGraph?: StaticGraphConfig;
+  /** G3C: Assurance level CI gating. */
+  assurance?: {
+    /** Fail CI if overall assurance level is below this value. */
+    minLevel?: AssuranceLevelValue;
+    /** Fail CI if any changed god node has assurance below this value. */
+    godNodeMinLevel?: AssuranceLevelValue;
+  };
   // Allow extension fields without losing type safety.
   [key: string]: unknown;
 };
@@ -519,6 +571,12 @@ export type BehaviorDiff = {
   removedSignatures: SignatureChange[];
   changedResources:  ResourceChange[];
   responseShapeChange?: ResponseShapeChange;
+  /**
+   * G13: human-readable name for the test or request that produced this diff.
+   * Populated by `tracegraph compare` from the session entrypoint.
+   * Used by the CI reporter instead of the opaque traceId.
+   */
+  testName?: string;
 };
 
 // ─── EvaluatedFinding ─────────────────────────────────────────────────────────
@@ -550,6 +608,22 @@ export type TraceReport = {
   diffs:                BehaviorDiff[];
   findings:             EvaluatedFinding[];
   summary:              ReportSummary;
+  /** G3C: Evidence quality for this report's analysis. */
+  assurance?:           AssuranceLevel;
+  /** G7: Overall release-gate verdict. */
+  verdict?:             AuditVerdict;
+  /** G6: Cross-run test set comparison (baseline vs candidate test coverage). */
+  testDelta?:           TestDelta;
+  /** G6: How baseline traces were matched to candidate traces. */
+  traceMatching?:       TraceMatchingSummary;
+  /** G8: PR metadata and changed files (populated by `tracegraph audit`). */
+  prContext?:           PrContext;
+  /**
+   * G18: Overall capture level of the candidate run (minimum across all candidate
+   * sessions).  Populated by `tracegraph compare` and rendered in the CI report's
+   * "Capture Level" section so reviewers can see what depth of evidence was collected.
+   */
+  captureLevel?:        Pick<CaptureLevel, 'overall' | 'label'>;
 };
 
 // ─── Latest pointer (written by tracegraph run) ──────────────────────────────
@@ -686,6 +760,14 @@ export type ChangedFunction = {
   methodName?:   string;
   /** Line number within the new (post-diff) file where the declaration starts. */
   startLine:     number;
+  /**
+   * G3: Set when a static graph is available and this function matched a static node.
+   * Includes architecture risk metadata (god-node status, community, centrality).
+   */
+  staticNode?: Pick<StaticNodeMeta,
+    'symbolName' | 'communityId' | 'communityLabel' |
+    'centralityPercentile' | 'isGodNode' | 'degree'
+  >;
 };
 
 /**
@@ -721,6 +803,22 @@ export type ChangeCoverageReport = {
     /** 0–100, integer. */
     coveragePercent:   number;
   };
+  /**
+   * G3: Present when a static graph was available during coverage analysis.
+   * Provides architecture risk assessment for changed functions.
+   */
+  architectureRisk?: {
+    godNodesChanged:   number;
+    godNodesUncovered: number;
+    criticalNodes:     Array<{
+      symbolName:           string;
+      centralityPercentile: number;
+      communityLabel?:      string;
+      covered:              boolean;
+    }>;
+  };
+  /** G3C: Evidence quality assessment for this coverage analysis. */
+  assurance?: AssuranceLevel;
 };
 
 // ─── Prompt Pack Builder (M7A T7A.3) ─────────────────────────────────────────
@@ -756,6 +854,396 @@ export const EXIT_CODES = {
   SCHEMA_MIGRATION:           5,
   /** Capture level is below the project-configured minimum requirement. */
   CAPTURE_LEVEL_INSUFFICIENT: 6,
+  // G-series exit codes
+  /** G3: --fail-on-uncovered-god: uncovered god nodes exist. */
+  GOD_NODE_UNCOVERED:         7,
+  /** G3C: assurance.minLevel requirement not met. */
+  ASSURANCE_INSUFFICIENT:     8,
 } as const;
 
 export type ExitCode = typeof EXIT_CODES[keyof typeof EXIT_CODES];
+
+// =============================================================================
+// G-Series — Static Architecture Intelligence types
+// =============================================================================
+
+// ─── StaticNodeMeta (attached to TraceEvent.static after enrichment) ──────────
+
+/**
+ * Static architecture metadata attached to a runtime TraceEvent after
+ * enrichment by the static-graph resolver (G2).
+ *
+ * Never set at capture time — only added by the post-run enricher.
+ * All fields are optional; `provider` is always set when the field is present.
+ */
+export type StaticNodeMeta = {
+  /** Which static graph provider produced this metadata. */
+  provider: 'graphify';
+  /** Provider-internal node ID. */
+  nodeId?: string;
+  /** Fully qualified symbol name (e.g. "App\\Http\\Controllers\\PaymentController::charge"). */
+  symbolName?: string;
+  file?: string;
+  line?: number;
+  /** Extracted or inferred docstring. */
+  docstring?: string;
+  /** Design rationale comments near the declaration. */
+  rationale?: string[];
+  communityId?: string;
+  communityLabel?: string;
+  /** Total count of incident edges (in + out). */
+  degree?: number;
+  /** 0–100: 99 = top 1% by degree, 50 = median. */
+  centralityPercentile?: number;
+  /** True when centralityPercentile >= godNodeThresholdPercentile config value. */
+  isGodNode?: boolean;
+  /** Immediately adjacent symbol names. */
+  neighbors?: string[];
+  /** 0.0–1.0 confidence of the runtime event → static node match. */
+  matchConfidence?: number;
+  /** Provenance of the static information. */
+  provenance?: 'EXTRACTED' | 'INFERRED' | 'AMBIGUOUS';
+};
+
+// ─── GraphMetadata ────────────────────────────────────────────────────────────
+
+/**
+ * Written to .tracegraph/static-graph/graph_metadata.json after a successful
+ * `tracegraph graph build`. Committed by teams for reproducibility.
+ */
+export type GraphMetadata = {
+  provider: 'graphify';
+  graphifyVersion: string;
+  builtAt: number;
+  /** Git commit SHA at the time the graph was built. */
+  commit: string;
+  nodeCount: number;
+  edgeCount: number;
+  communityCount: number;
+  godNodeCount: number;
+  /** Relative path to the static-graph directory from the project root. */
+  graphDir: string;
+  /**
+   * Number of runtime-observed call edges derived from PHP debug_backtrace()
+   * during a tracegraph audit run (Phase 2 invasive).  Only present when
+   * runtime_call_edges.json has been written.  Used to supplement the static
+   * edge count when graphify reports 0 edges (common for PHP dynamic dispatch).
+   */
+  runtimeEdgeCount?: number;
+};
+
+// ─── StaticGraphConfig ────────────────────────────────────────────────────────
+
+/**
+ * Configuration for static graph enrichment.
+ * Added to TracegraphConfig.staticGraph (see below).
+ */
+export type StaticGraphConfig = {
+  /** Enable static graph enrichment. Default: false. */
+  enabled: boolean;
+  /** Static graph provider. Only 'graphify' is supported. Default: 'graphify'. */
+  provider?: 'graphify';
+  /** Directory to store static graph artifacts. Default: '.tracegraph/static-graph'. */
+  graphDir?: string;
+  /** Shell command used to build the graph. Default: 'graphify .' */
+  buildCommand?: string;
+  /** Automatically rebuild the graph when stale. Default: false. */
+  autoBuild?: boolean;
+  /** What to do when the graph commit differs from HEAD. Default: 'warn'. */
+  staleGraphPolicy?: 'warn' | 'error' | 'ignore';
+  /**
+   * Minimum resolver confidence to attach static metadata to a runtime event.
+   * 0.0–1.0. Default: 0.75.
+   */
+  minMatchConfidence?: number;
+  /**
+   * A node is a "god node" when its centralityPercentile is >= this value.
+   * 95 means top 5%. Default: 95.
+   */
+  godNodeThresholdPercentile?: number;
+  /**
+   * Community labels containing these strings are flagged as sensitive.
+   * New edges crossing into these communities produce higher-severity findings.
+   * Default: ['auth', 'billing', 'payments', 'identity'].
+   */
+  sensitiveCommunities?: string[];
+  /**
+   * Automatically enrich runtime trace events with static metadata after
+   * `tracegraph run` completes. Requires enrichTraces !== false. Default: true.
+   */
+  enrichTraces?: boolean;
+};
+
+// ─── G6: TestIdentity ────────────────────────────────────────────────────────
+
+/**
+ * Canonical identity for a single test case.
+ * Used in TestDelta, TraceMatchingSummary, and evidence_continuity findings.
+ */
+export type TestIdentity = {
+  /** Full display name e.g. "CalculationToQuantityTest::testItAcceptsCommaDecimalQuantities" */
+  testName:      string;
+  /** Source file relative to repo root (when known). */
+  testFile?:     string;
+  /** PHPUnit class / Jest describe block. */
+  className?:    string;
+  /** Test method / it() label. */
+  method?:       string;
+  /** Test runner framework: 'phpunit' | 'pest' | 'jest' | 'vitest' | 'mocha' */
+  framework?:    string;
+  /** Stable 12-char SHA-256 hash — matches the baseline filename prefix. */
+  identityHash:  string;
+  /**
+   * Run outcome — populated for candidate tests from the trace session status.
+   * Absent for baseline-derived TestIdentity objects (baseline approval does not
+   * track per-run outcomes).
+   */
+  status?:       'passed' | 'failed' | 'skipped';
+  /**
+   * First non-empty line of the test failure message, taken from the
+   * test_run event's error.message field.  Only populated for status='failed'.
+   */
+  failureMessage?: string;
+};
+
+// ─── G6: TestDelta ───────────────────────────────────────────────────────────
+
+/**
+ * G6 — Cross-run test set comparison.
+ * Answers: did the candidate run cover the same tests as the baseline?
+ */
+export type TestDelta = {
+  baselineTests:      TestIdentity[];  // all tests that have a stored baseline
+  candidateTests:     TestIdentity[];  // all tests observed in the candidate run
+  matchedTests:       TestIdentity[];  // present in both baseline and candidate
+  baselineOnlyTests:  TestIdentity[];  // baselined but not seen in candidate
+  candidateOnlyTests: TestIdentity[];  // seen in candidate but never baselined
+};
+
+// ─── G6: TraceMatchingSummary ────────────────────────────────────────────────
+
+/**
+ * G6 — How successfully baseline traces were paired with candidate traces.
+ */
+export type TraceMatchingSummary = {
+  /** Total baselines stored in .tracegraph/baselines/ */
+  baselineCount:      number;
+  /** Total candidate sessions loaded for this compare run */
+  candidateCount:     number;
+  /** Candidates that found an exact testId match in the baseline store */
+  exactMatches:       number;
+  /** Baselines with no matching candidate (evidence disappeared) */
+  unmatchedBaseline:  number;
+  /** Candidates with no baseline (new tests, no expected-behaviour reference) */
+  unmatchedCandidate: number;
+  /** Matching strategy used */
+  matchStrategy:      'exact';
+  /** Overall confidence that the comparison covers the intended test scope */
+  confidence:         'high' | 'medium' | 'low';
+  /**
+   * G19: false when all candidate traces were captured at Level 0 (runner metadata only).
+   * In that case the match is structural (same test IDs) but carries no behavioral content —
+   * "high confidence" is misleading. The CI reporter uses this to show a more accurate note.
+   */
+  comparableContent?: boolean;
+};
+
+// ─── G6: ArchitectureQualityLevel ────────────────────────────────────────────
+
+/**
+ * G6 — Static graph quality tier.
+ *
+ * A0 = No graph
+ * A1 = Node list only (0 edges) — file/symbol index, no relationships
+ * A2 = Nodes + edges (0 communities) — import/call graph, no community detection
+ * A3 = Nodes + edges + communities — full structural topology available
+ * A4 = Communities + centrality (god nodes computed)
+ * A5 = Static graph linked to runtime traces (future)
+ */
+export type ArchitectureQualityLevel = 'A0' | 'A1' | 'A2' | 'A3' | 'A4' | 'A5';
+
+// ─── G7: AuditVerdict ────────────────────────────────────────────────────────
+
+/**
+ * G7 — The overall release-gate verdict for this audit.
+ *
+ * pass                = no open findings; adequate evidence coverage
+ * review_required     = findings or evidence gaps that need human sign-off
+ * conditional_go      = only low/medium findings; no blocking issues
+ * no_go               = critical findings that must be resolved before merge
+ * insufficient_evidence = could not gather enough traces to render a verdict
+ */
+export type AuditVerdictStatus =
+  | 'pass'
+  | 'review_required'
+  | 'conditional_go'
+  | 'no_go'
+  | 'insufficient_evidence';
+
+export type AuditVerdict = {
+  status:  AuditVerdictStatus;
+  /** Human-readable reasons supporting the verdict. */
+  reasons: string[];
+};
+
+// ─── G8: PrContext ───────────────────────────────────────────────────────────
+
+/**
+ * G8 — PR metadata passed from `tracegraph audit` into the compare pipeline
+ * and stored in the report for display and relevance analysis.
+ */
+export type PrContext = {
+  prNumber?:         number;
+  prTitle?:          string;
+  prAuthor?:         string;
+  additions?:        number;
+  deletions?:        number;
+  changedFiles?:     number;
+  /** Actual file paths changed by the PR (fetched from GitHub /pulls/:id/files). */
+  changedFilePaths?: string[];
+  /**
+   * G15: Project language inferred from the stack detector during audit.
+   * Overrides session-level language detection in `compare` for more accurate
+   * language hints when the project language differs from the test runner language.
+   */
+  language?: string;
+  /**
+   * G14: Exit code of the PR-branch test run.
+   * Non-zero means tests failed or errored during the audit run.
+   * Omitted (or 0) when the run succeeded.
+   */
+  testRunExitCode?: number;
+  /**
+   * G14: Exit code of the base-branch (baseline) test run.
+   * Non-zero means the baseline test run itself was unhealthy.
+   * Omitted (or 0) when the baseline run succeeded.
+   */
+  baselineRunExitCode?: number;
+  /**
+   * G19: First meaningful boot/startup error extracted from the PR-branch test run
+   * output.  Set when the PR run exits at Level 0 (no test events captured) due to
+   * a framework boot failure (PHP artisan crash, Node.js module error, etc.).
+   *
+   * Example: "Call to undefined method Nwidart\\Modules\\Providers\\ConsoleServiceProvider::defaultCommands()"
+   *
+   * Used by the CI reporter to show reviewers the root cause directly in the report
+   * without them having to scroll through the raw terminal output.
+   */
+  bootError?: string;
+};
+
+// ─── AssuranceLevel ───────────────────────────────────────────────────────────
+
+/**
+ * G3C — Evidence quality for a function, route, module, or the whole project.
+ *
+ * 0 = Unknown        — no static graph, no runtime trace
+ * 1 = Static-known   — appears in Graphify graph (symbol, file, relationships)
+ * 2 = Risk-classified — god-node, community, blast-radius computed
+ * 3 = Runtime-observed — at least one runtime trace exercised it
+ * 4 = Runtime-baselined — expected behavior approved and stored
+ * 5 = Contract-protected — runtime contract enforces must-call/must-not
+ */
+export type AssuranceLevelValue = 0 | 1 | 2 | 3 | 4 | 5;
+
+export type AssuranceLevel = {
+  level:                    AssuranceLevelValue;
+  /** Human-readable label for the level. */
+  label:                    string;
+  staticGraphAvailable:     boolean;
+  runtimeTraceAvailable:    boolean;
+  runtimeBaselineAvailable: boolean;
+  contractAvailable:        boolean;
+  /** G6: Architecture graph quality tier (A0–A5). Absent when no static graph. */
+  architectureQualityLevel?: ArchitectureQualityLevel;
+  /** G6: Raw graph metrics from graph_metadata.json. */
+  architectureNodes?:        number;
+  architectureEdges?:        number;
+  architectureCommunities?:  number;
+  /**
+   * G18: True when ALL candidate traces were captured at Level 0 (runner metadata
+   * only).  Used by the CI reporter to show "not comparable" rather than "not
+   * created" for runtime baselines — baselines may exist from the base branch
+   * but a Level 0 PR run makes comparison vacuous.
+   */
+  allTracesLevel0?:          boolean;
+};
+
+// ─── FindingEvidenceSource ────────────────────────────────────────────────────
+
+/**
+ * G-series: the evidence source that produced a finding.
+ * Multiple sources may apply (e.g. static_graph + coverage_gap).
+ */
+export type FindingEvidenceSource =
+  | 'runtime_baseline'    // Runtime diff — strongest evidence (confidence: 1.00)
+  | 'runtime_contract'    // Must-call/must-not contract triggered (confidence: 0.95)
+  | 'scenario_trace'      // Scenario runner trace expectation (confidence: 0.90)
+  | 'static_graph'        // Pure Graphify static relationship (confidence: 0.60–0.85)
+  | 'static_inferred'     // Graphify + partial runtime path reconstruction (confidence: 0.65–0.80)
+  | 'coverage_gap'        // Static node in diff but no matching runtime trace event (confidence: 0.80)
+  | 'manual'              // Manually annotated contract or suppression
+  ;
+
+// ─── ArchitectureBaseline ─────────────────────────────────────────────────────
+
+/**
+ * G3D — Static architecture baseline.
+ * Written to .tracegraph/static-graph/architecture-baseline.json.
+ * Separate from runtime baselines (.tracegraph/baselines/).
+ * Commit this file for team-wide architecture drift detection.
+ */
+export type ArchitectureBaselineGodNode = {
+  symbolName:           string;
+  communityId:          string;
+  communityLabel:       string;
+  centralityPercentile: number;
+  file?:                string;
+};
+
+export type ArchitectureBaselineCommunity = {
+  communityId:  string;
+  label:        string;
+  size:         number;
+  isSensitive:  boolean;
+};
+
+export type ArchitectureBaselineCrossEdge = {
+  fromCommunityId:    string;
+  fromCommunityLabel: string;
+  toCommunityId:      string;
+  toCommunityLabel:   string;
+  callerSymbol:       string;
+  calleeSymbol:       string;
+  /** Number of runtime traces that observed this edge at baseline time. 0 = static-only. */
+  traceCount:         number;
+  /** True when only the static graph (not runtime) confirmed this edge at baseline time. */
+  staticOnly:         boolean;
+};
+
+export type ArchitectureBaseline = {
+  schemaVersion:       'tracegraph.architecture-baseline.v1';
+  createdAt:           number;
+  createdBy:           string;
+  commit:              string;
+  provider:            'graphify';
+  graphifyVersion:     string;
+  nodeCount:           number;
+  edgeCount:           number;
+  communityCount:      number;
+  godNodes:            ArchitectureBaselineGodNode[];
+  communities:         ArchitectureBaselineCommunity[];
+  crossCommunityEdges: ArchitectureBaselineCrossEdge[];
+  /**
+   * Static call paths inferred from the graph for sensitive routes/functions.
+   * Used by G2 Tier 2 (inferred runtime expectations) to detect probable missing auth.
+   */
+  inferredCallPaths?:  Array<{
+    /** Route or function entry point (e.g. "POST /orders", "OrderController.store"). */
+    entrypoint:   string;
+    /** Ordered list of symbol names expected in the call chain. */
+    expectedPath: string[];
+    confidence:   number;
+    source:       'static_graph';
+  }>;
+};

@@ -62,6 +62,9 @@ export async function testgenCommand(
     return EXIT_CODES.CLI_ERROR;
   }
 
+  // G3: Sort god-node routes first (requires G2 enrichment on the trace)
+  sortGodNodeRoutesFirst(routes, session);
+
   const framework = resolveFramework(options.framework, session);
 
   // Generate test content and derive the output filename
@@ -111,7 +114,108 @@ type RouteTestCase = {
   statusCode: number;
   hasAuth:    boolean;
   authRoles:  string[];
+  // G3: populated by sortGodNodeRoutesFirst when G2 enrichment exists on the trace
+  isGodNodeRoute?: boolean;
+  godNodeNames?:   string[];      // display names of god-node functions in this route
+  godNodeCommunity?: string;      // community of the first god node
+  godNodeCentrality?: string;     // "top N%" centrality label
 };
+
+// ─── G3: God-node route priority ─────────────────────────────────────────────
+
+/**
+ * Sort `routes` in-place: god-node routes come first.
+ * Annotates each route with `isGodNodeRoute`, `godNodeNames`, etc.
+ * Requires the trace to have been enriched by G2 (`tracegraph graph enrich`).
+ * When the trace has no `event.static` data, this is a no-op (stable sort).
+ */
+function sortGodNodeRoutesFirst(routes: RouteTestCase[], session: TraceSession): void {
+  const events = session.events;
+
+  // Build parent→children index for descendant traversal
+  const byParent = new Map<string, TraceEvent[]>();
+  for (const e of events) {
+    if (e.parentEventId) {
+      const bucket = byParent.get(e.parentEventId) ?? [];
+      bucket.push(e);
+      byParent.set(e.parentEventId, bucket);
+    }
+  }
+
+  // Event lookup by eventId
+  const byId = new Map<string, TraceEvent>();
+  for (const e of events) { if (e.eventId) byId.set(e.eventId, e); }
+
+  // For each route, find its corresponding http_request event and check descendants
+  const requestByRoute = new Map<string, TraceEvent>();
+  for (const e of events) {
+    if (e.type !== 'http_request') continue;
+    const method    = extractMethod(e);
+    const routePath = extractRoutePath(e);
+    requestByRoute.set(`${method} ${routePath}`, e);
+  }
+
+  for (const route of routes) {
+    const reqEvent = requestByRoute.get(`${route.method} ${route.routePath}`);
+    if (!reqEvent?.eventId) continue;
+
+    // BFS to collect all descendant events
+    const godNodeFunctions: Array<{ name: string; community?: string; centrality?: string }> = [];
+    const queue = [reqEvent.eventId];
+    const visited = new Set<string>();
+
+    while (queue.length > 0) {
+      const id = queue.shift()!;
+      if (visited.has(id)) continue;
+      visited.add(id);
+
+      for (const child of (byParent.get(id) ?? [])) {
+        if (!child.eventId) continue;
+        // Check for god-node static metadata (set by G2 enricher)
+        const staticMeta = (child as { static?: { isGodNode?: boolean; communityLabel?: string; centralityPercentile?: number; symbolName?: string } }).static;
+        if (staticMeta?.isGodNode) {
+          const displayName = child.methodName ?? child.functionName ?? child.name ?? '?';
+          const centrality  = staticMeta.centralityPercentile != null
+            ? `top ${100 - staticMeta.centralityPercentile}%`
+            : undefined;
+          godNodeFunctions.push({
+            name:       displayName,
+            community:  staticMeta.communityLabel,
+            centrality,
+          });
+        }
+        queue.push(child.eventId);
+      }
+    }
+
+    if (godNodeFunctions.length > 0) {
+      route.isGodNodeRoute    = true;
+      route.godNodeNames      = [...new Set(godNodeFunctions.map((n) => n.name))];
+      route.godNodeCommunity  = godNodeFunctions[0]?.community;
+      route.godNodeCentrality = godNodeFunctions[0]?.centrality;
+    }
+  }
+
+  // Stable sort: god-node routes first
+  routes.sort((a, b) => {
+    if (a.isGodNodeRoute && !b.isGodNodeRoute) return -1;
+    if (!a.isGodNodeRoute && b.isGodNodeRoute)  return 1;
+    return 0;
+  });
+}
+
+/** Produce the god-node annotation comment lines for a route, or empty array. */
+function godNodeComment(r: RouteTestCase, commentChar: string): string[] {
+  if (!r.isGodNodeRoute || !r.godNodeNames?.length) return [];
+  const names    = r.godNodeNames.slice(0, 3).join(', ');
+  const extra    = r.godNodeNames.length > 3 ? ` + ${r.godNodeNames.length - 3} more` : '';
+  const community = r.godNodeCommunity ? ` (${r.godNodeCommunity}` + (r.godNodeCentrality ? `, ${r.godNodeCentrality})` : ')') : '';
+  return [
+    `${commentChar} ⚡ GOD NODE ROUTE — ${names}${extra}${community}`,
+    `${commentChar} This route exercises high-centrality architecture functions.`,
+    `${commentChar} Ensure all changed branches are covered before merging.`,
+  ];
+}
 
 // ─── Sensitive field sanitisation ─────────────────────────────────────────────
 
@@ -399,6 +503,9 @@ function generateExpressTests(routes: RouteTestCase[]): string {
     const body    = bodyAsJs(r.body);
     const label   = `${r.method} ${r.routePath}`;
 
+    // G3: god-node annotation
+    for (const line of godNodeComment(r, '//')) lines.push(line);
+
     lines.push(`describe('${label}', () => {`);
 
     // Authenticated (or unauthenticated if no auth check)
@@ -469,6 +576,9 @@ function generateLaravelTests(routes: RouteTestCase[]): string {
     const phpBody    = bodyAsPhp(r.body);
     const fnBase     = toIdentifier(r.method, r.routePath);
 
+    // G3: god-node annotation
+    for (const line of godNodeComment(r, '    //')) lines.push(line);
+
     // Authenticated test
     lines.push(`    /** @test */`);
     lines.push(`    public function ${fnBase}_returns_${r.statusCode}${r.hasAuth ? '_when_authenticated' : ''}(): void`);
@@ -536,6 +646,9 @@ function generateFastapiTests(routes: RouteTestCase[]): string {
     const pyBody  = bodyAsPython(r.body);
     const fnBase  = toIdentifier(r.method, r.routePath);
     const hasBody = r.body && Object.keys(r.body).length > 0;
+
+    // G3: god-node annotation
+    for (const line of godNodeComment(r, '#')) lines.push(line);
 
     // Authenticated test
     lines.push(
@@ -607,6 +720,9 @@ function generateGinTests(routes: RouteTestCase[]): string {
       .join('');
     const goBody  = bodyAsGo(r.body);
     const hasBody = r.body && Object.keys(r.body).length > 0;
+
+    // G3: god-node annotation
+    for (const line of godNodeComment(r, '//')) lines.push(line);
 
     // Authenticated test
     lines.push(

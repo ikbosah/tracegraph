@@ -27,11 +27,44 @@ import https    from 'https';
 import readline from 'readline';
 import { spawnSync } from 'child_process';
 import { EXIT_CODES } from '@tracegraph/shared-types';
+import {
+  detectGraphify,
+  runtimeCallEdgesPath,
+  importRuntimeCallEdges,
+  loadOrRebuildGraphIndex,
+  graphMetadataPath,
+} from '@tracegraph/static-graph';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-/** Absolute path to the currently-running tracegraph CLI entry point. */
-const TG_BIN = process.argv[1]!;
+/**
+ * Absolute path to the CLI entry point used when spawning `tracegraph run`
+ * as a subprocess during audit phases.
+ *
+ * In production:
+ *   process.argv[1] = /path/to/bin/tracegraph.js   — compiled shim, works as-is
+ *   process.argv[1] = /path/to/dist/index.js       — compiled bundle, works as-is
+ *
+ * In development (tsx shim like `exec tsx /path/to/packages/cli/src/index.ts`):
+ *   process.argv[1] = /path/to/packages/cli/src/index.ts
+ *   → spawnSync(node, [src/index.ts]) would fail: Node.js cannot parse TypeScript
+ *     without tsx's loader, which is a command-line flag — not propagated to children.
+ *   → Replace with the compiled dist/index.js (always present after `pnpm build`).
+ *   → Fallback: bin/tracegraph.js which loads dist/ or tsx itself.
+ */
+const TG_BIN: string = (() => {
+  const src = process.argv[1]!;
+  if (!src.endsWith('.ts')) return src;          // already a JS shim or compiled bundle
+
+  // src = .../packages/cli/src/index.ts — running via tsx in development
+  const dist = src.replace(/[/\\]src[/\\]index\.ts$/, '/dist/index.js');
+  if (fs.existsSync(dist)) return dist;          // compiled bundle — preferred
+
+  const bin = src.replace(/[/\\]src[/\\]index\.ts$/, '/bin/tracegraph.js');
+  if (fs.existsSync(bin)) return bin;            // shim with tsx fallback
+
+  return src;                                    // give up — caller will fail gracefully
+})();
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -50,6 +83,8 @@ export type AuditOptions = {
   json?:      boolean;
   /** Per-phase timeout in seconds (default: 300). */
   timeout?:   number;
+  /** Skip Graphify static graph analysis even if Graphify is installed. */
+  skipGraph?: boolean;
 };
 
 // Minimal subset of the GitHub PR list / detail response
@@ -213,6 +248,33 @@ async function fetchPRDetail(
   owner: string, repo: string, prNumber: number, token?: string,
 ): Promise<GhPR> {
   return githubRequest<GhPR>('GET', `/repos/${owner}/${repo}/pulls/${prNumber}`, token);
+}
+
+/**
+ * G8 — Fetch the list of files changed by a PR.
+ * Returns an array of relative file paths (up to 300 files).
+ * Returns [] on any error (non-critical — PR context is best-effort).
+ */
+async function fetchPRFiles(
+  owner: string, repo: string, prNumber: number, token?: string,
+): Promise<string[]> {
+  try {
+    // GitHub caps at 300 files per PR; max 100 per page.
+    const allFiles: string[] = [];
+    for (let page = 1; page <= 3; page++) {
+      const items = await githubRequest<Array<{ filename: string }>>(
+        'GET',
+        `/repos/${owner}/${repo}/pulls/${prNumber}/files?per_page=100&page=${page}`,
+        token,
+      );
+      if (!Array.isArray(items) || items.length === 0) break;
+      allFiles.push(...items.map((f) => f.filename));
+      if (items.length < 100) break;
+    }
+    return allFiles;
+  } catch {
+    return [];
+  }
 }
 
 async function forkRepo(
@@ -437,11 +499,81 @@ function findBestTestScript(scripts: Record<string, string>): string | null {
   return null;
 }
 
+/**
+ * Scan workspace subpackage package.json files for a test runner when the
+ * root package.json has no direct test-runner dependency and its scripts only
+ * delegate (e.g. `cd packages/vite && pnpm test` — "vitest" never appears in
+ * the root).  Handles pnpm-workspace.yaml, and npm/yarn `workspaces` field.
+ */
+function detectTestRunnerFromWorkspacePackages(
+  repoDir: string,
+): 'vitest' | 'jest' | 'mocha' | null {
+  const globs: string[] = [];
+
+  // pnpm: workspaces declared in pnpm-workspace.yaml
+  try {
+    const yaml = fs.readFileSync(path.join(repoDir, 'pnpm-workspace.yaml'), 'utf8');
+    for (const m of yaml.match(/^\s+-\s+['"]?([^'"\n]+)['"]?/gm) ?? []) {
+      const g = m.replace(/^\s+-\s+['"]?/, '').replace(/['"]?\s*$/, '').trim();
+      if (g) globs.push(g);
+    }
+  } catch { /* no pnpm-workspace.yaml */ }
+
+  // npm / yarn: workspaces declared in package.json `workspaces` field
+  if (globs.length === 0) {
+    try {
+      const pkg = JSON.parse(
+        fs.readFileSync(path.join(repoDir, 'package.json'), 'utf8'),
+      ) as Record<string, unknown>;
+      const ws = pkg['workspaces'];
+      const wsArr = Array.isArray(ws) ? ws
+        : Array.isArray((ws as Record<string, unknown> | undefined)?.['packages'])
+          ? (ws as Record<string, unknown[]>)['packages']!
+          : [];
+      for (const g of wsArr) { if (typeof g === 'string') globs.push(g); }
+    } catch { /* ignore */ }
+  }
+
+  for (const glob of globs) {
+    // Handle simple 'packages/*' or 'apps/*' style globs (not deep **)
+    const basePart = glob.replace(/\/\*+$/, '');
+    const subDir = path.join(repoDir, basePart);
+    let subEntries: string[];
+    try { subEntries = fs.readdirSync(subDir); } catch { continue; }
+
+    for (const entry of subEntries) {
+      const pkgPath = path.join(subDir, entry, 'package.json');
+      try {
+        const subPkg = JSON.parse(
+          fs.readFileSync(pkgPath, 'utf8'),
+        ) as Record<string, unknown>;
+        const subDeps = {
+          ...(subPkg['dependencies']    as Record<string, string> ?? {}),
+          ...(subPkg['devDependencies'] as Record<string, string> ?? {}),
+        };
+        const subScripts = Object.values(
+          subPkg['scripts'] as Record<string, string> ?? {},
+        ).join(' ');
+        if ('vitest' in subDeps || subScripts.includes('vitest')) return 'vitest';
+        if ('jest'   in subDeps || subScripts.includes('jest'))   return 'jest';
+        if (subScripts.includes('mocha'))                         return 'mocha';
+      } catch { /* unreadable */ }
+    }
+  }
+
+  return null;
+}
+
 function detectStack(repoDir: string): RepoStack {
   const entries = fs.readdirSync(repoDir);
 
   // ── Node.js ──────────────────────────────────────────────────────────────────
-  if (entries.includes('package.json')) {
+  // Skip Node.js detection when `artisan` is present — that is an unambiguous
+  // Laravel indicator.  Many Laravel repos ship a package.json for their Vue /
+  // React frontend assets and may even have express-adjacent npm packages, but
+  // the primary language and test runner are PHP.  Let the PHP block below
+  // handle them so we run `php artisan test` instead of looking for a JS runner.
+  if (entries.includes('package.json') && !entries.includes('artisan')) {
     let pkg: Record<string, unknown> = {};
     try {
       pkg = JSON.parse(fs.readFileSync(path.join(repoDir, 'package.json'), 'utf8')) as Record<string, unknown>;
@@ -472,11 +604,19 @@ function detectStack(repoDir: string): RepoStack {
     // Detect test runner from deps + the best script's value
     const scriptValue = bestScript ? (scripts[bestScript] ?? '') : '';
     const allScriptValues = Object.values(scripts).join(' ');
-    const testRunner =
+    let testRunner: 'vitest' | 'jest' | 'mocha' | null =
       'vitest' in deps || scriptValue.includes('vitest') || allScriptValues.includes('vitest') ? 'vitest' :
       'jest'   in deps || scriptValue.includes('jest')   || allScriptValues.includes('jest')   ? 'jest'   :
       scriptValue.includes('mocha') || allScriptValues.includes('mocha')                       ? 'mocha'  :
       null;
+
+    // Monorepos often delegate test scripts to a sub-package (e.g.
+    // `cd packages/vite && pnpm test`) where vitest/jest never appears in the
+    // root scripts or deps.  Scan workspace subpackage package.json files as a
+    // fallback so buildInstrumentation can still inject the reporter.
+    if (!testRunner) {
+      testRunner = detectTestRunnerFromWorkspacePackages(repoDir);
+    }
 
     // Build the effective test command using the correct package manager.
     // Priority: found script → detected runner → empty (no safe fallback exists).
@@ -953,6 +1093,19 @@ function buildInstrumentation(
   let nodeOpts  = process.env['NODE_OPTIONS'] ?? '';
   let level     = stack.captureNote;
 
+  // pnpm, npm, and yarn all forward extra flags after the script name directly
+  // to the underlying script WITHOUT adding a `--` separator. Using `--` is
+  // actually wrong for pnpm v10: `pnpm run test -- --reporter=x` causes pnpm
+  // to pass `-- --reporter=x` (with the literal `--`) to the script, and vitest
+  // interprets everything after `--` as test-file glob patterns — so `--reporter=x`
+  // becomes a file filter that matches nothing, and the reporter never loads.
+  // Appending flags directly (`pnpm run test --reporter=x`) is the correct form:
+  // pnpm forwards `--reporter=x` to the script as a CLI option.
+  // Keep this variable for documentation / future use if a specific case needs it.
+  const isPackageManagerScript = ['npm', 'pnpm', 'yarn'].includes(testCmd[0] ?? '')
+    && testCmd[1] === 'run';
+  void isPackageManagerScript; // intentionally unused — see comment above
+
   if (stack.language !== 'node') {
     return { testCmd, nodeOptions: null, captureLevel: level };
   }
@@ -968,16 +1121,22 @@ function buildInstrumentation(
     level = 'Level 3 (CJS hook — HTTP, Express, external calls)';
   }
 
-  // Level 4 — ESM import hook via NODE_OPTIONS --import (Node.js 18.19+ / 20.6+).
-  // Works alongside Level 3: --require handles CJS modules, --import handles ESM.
-  // Together they give full coverage of both module systems.  Safe on older Node
-  // versions where the flag is unknown — Node will emit a warning but still run.
-  if (tgPaths.registerEsm) {
-    const esmPath = tgPaths.registerEsm.replace(/\\/g, '/');
-    const importFlag = `--import "${esmPath}"`;
-    nodeOpts = nodeOpts ? `${nodeOpts} ${importFlag}` : importFlag;
-    level = level.startsWith('Level 3') ? level.replace('Level 3', 'Level 3–4') : level;
-  }
+  // Level 4 — ESM import hook via NODE_OPTIONS --import is intentionally skipped.
+  //
+  // --import with an ESM module that contains esbuild's __require shim (CJS-in-ESM
+  // interop) triggers a Node.js ESM/CJS loader deadlock on Node.js 20+ when the
+  // flag is passed via NODE_OPTIONS to a process that also runs CJS code (pnpm,
+  // vitest workers).  The process hangs indefinitely rather than crashing, meaning
+  // no tests run and no output is produced.
+  //
+  // The CJS hook (Level 3) via --require covers HTTP / fetch tracing for both
+  // CJS and ESM test files in practice, because vitest's Vite transform pipeline
+  // processes all files through CJS require() regardless of their source extension.
+  // Level 5 (reporter) is the primary capture mechanism for the audit flow.
+  //
+  // Re-enable --import once the esbuild __require shim is replaced with a pure-ESM
+  // implementation of ChildEventWriter that does not use dynamic require().
+  void (tgPaths.registerEsm);  // suppress unused-variable lint
 
   // Level 5 — reporter injection.
   // Our reporter uses duck-typed interfaces and supports Vitest 1–4.
@@ -992,6 +1151,13 @@ function buildInstrumentation(
     // all package managers (no symlink assumptions, works before install).
     const vitestMajor = declaredMajor(repoDir, 'vitest');
 
+    // Helper: append reporter flags directly to the test command.
+    // pnpm/npm/yarn all forward extra flags after the script name to the underlying
+    // script as-is — no `--` separator needed or wanted.
+    const appendReporterArgs = (path: string): void => {
+      testCmd = [...testCmd, '--reporter=default', `--reporter=${path}`];
+    };
+
     if (vitestMajor != null && SUPPORTED_VITEST_MAJORS.has(vitestMajor)) {
       // Vitest 2+ uses ESM import() for reporters → prefer .mjs for correct default export.
       // Vitest 1.x uses CJS require() → use .js.
@@ -1000,13 +1166,13 @@ function buildInstrumentation(
         : tgPaths.vitestReporter;
       // Forward slashes required: backslashes in --reporter= paths cause 'not found' errors
       const reporterPath = (rawPath ?? '').replace(/\\/g, '/');
-      testCmd = [...testCmd, '--reporter=default', `--reporter=${reporterPath}`];
+      appendReporterArgs(reporterPath);
       level = `Level 5 (Vitest ${vitestMajor}.x reporter — per-test traces)`;
     } else if (vitestMajor == null) {
       // Version undeclared (unusual) — fall back to .mjs which works with ESM-first Vitest
       const rawPath = tgPaths.vitestReporterMjs ?? tgPaths.vitestReporter;
       const reporterPath = (rawPath ?? '').replace(/\\/g, '/');
-      testCmd = [...testCmd, '--reporter=default', `--reporter=${reporterPath}`];
+      appendReporterArgs(reporterPath);
       level = 'Level 5 (Vitest reporter — version undeclared, injecting ESM reporter)';
     } else {
       // Major is known but outside our tested range (e.g. future v5+).
@@ -1019,7 +1185,7 @@ function buildInstrumentation(
         `  Injecting reporter anyway (duck-typed, likely forward-compatible).\n` +
         `  If tests fail to start, rerun with TRACEGRAPH_NO_INJECT=1 to skip reporter.`,
       );
-      testCmd = [...testCmd, '--reporter=default', `--reporter=${reporterPath}`];
+      appendReporterArgs(reporterPath);
       level = `Level 5 (Vitest ${vitestMajor}.x reporter — untested version, injected)`;
     }
   } else if (stack.testRunner === 'jest' && tgPaths.jestReporter) {
@@ -1032,12 +1198,13 @@ function buildInstrumentation(
   // Without this, supertest's HTTP keep-alive sockets prevent the event loop from
   // draining naturally, causing the process to hang indefinitely after the test
   // summary is printed.
+  //
+  // npm and yarn require `--` to forward extra args through `npm run` / `yarn run`
+  // to the underlying script.  pnpm forwards extra args directly (no separator).
+  // Direct invocations (npx mocha, bare binary path) also need no separator.
   if (stack.testRunner === 'mocha') {
-    // When running via a package-manager script (npm run test / pnpm run test),
-    // use `--` to pass extra flags through to the underlying mocha invocation.
-    // When running mocha directly, just append the flag.
-    const isPackageScript = ['npm', 'pnpm', 'yarn'].includes(testCmd[0] ?? '');
-    testCmd = isPackageScript
+    const needsSeparator = testCmd[0] === 'npm' || testCmd[0] === 'yarn';
+    testCmd = needsSeparator
       ? [...testCmd, '--', '--exit']
       : [...testCmd, '--exit'];
     log('Mocha detected — adding --exit to force process exit after tests.');
@@ -1130,6 +1297,140 @@ function runTracegraph(
   return result.status ?? 1;
 }
 
+/**
+ * G19: Like `runTracegraph` but TEEs stdout+stderr to a temp file while still
+ * streaming them to the terminal in real-time.  Returns the exit code AND the
+ * captured combined output for post-run analysis (e.g. boot-error extraction).
+ *
+ * On Unix/Linux (the primary deployment platform): uses `bash -c "... 2>&1 | tee FILE;
+ * exit ${PIPESTATUS[0]}"` so the first command's exit code is preserved.
+ *
+ * On Windows: falls back to spawnSync with stdio:pipe — output appears all at once
+ * after the run completes (acceptable since Windows is not a primary target).
+ */
+function runTracegraphCapturing(
+  args:      string[],
+  cwd:       string,
+  extraEnv?: Record<string, string>,
+  timeoutMs = 600_000,
+): { status: number; captured: string } {
+  const env: Record<string, string> = {
+    ...(process.env as Record<string, string>),
+    TRACEGRAPH_NO_INJECT: '1',
+    ...extraEnv,
+  };
+
+  if (process.platform !== 'win32') {
+    // Unix: tee-based real-time capture
+    const tmpFile = path.join(os.tmpdir(), `tg_capture_${Date.now()}.txt`);
+    // Escape each argument for shell inclusion
+    const shellArgs = [process.execPath, TG_BIN, ...args]
+      .map((a) => `"${a.replace(/"/g, '\\"')}"`)
+      .join(' ');
+    const cmd = `${shellArgs} 2>&1 | tee "${tmpFile}"; exit \${PIPESTATUS[0]}`;
+    const result = spawnSync(cmd, [], {
+      cwd,
+      stdio:   'inherit',
+      env,
+      timeout: timeoutMs,
+      shell:   '/bin/bash',
+    });
+    let captured = '';
+    try {
+      captured = fs.readFileSync(tmpFile, 'utf8');
+      fs.unlinkSync(tmpFile);
+    } catch { /* temp file missing is non-fatal */ }
+    if (result.signal === 'SIGTERM' && result.status == null) {
+      process.stderr.write(
+        `[tracegraph audit] ⚠  Command timed out after ${timeoutMs / 1000}s: ${args.join(' ')}\n`,
+      );
+      return { status: EXIT_TIMEOUT, captured };
+    }
+    return { status: result.status ?? 1, captured };
+  } else {
+    // Windows fallback: capture stdio, display after run
+    const result = spawnSync(process.execPath, [TG_BIN, ...args], {
+      cwd,
+      stdio:    ['inherit', 'pipe', 'pipe'],
+      env,
+      timeout:  timeoutMs,
+      encoding: 'utf8',
+      shell:    false,
+    });
+    const captured = ((result.stdout as string | null) ?? '') + ((result.stderr as string | null) ?? '');
+    if (result.stdout) process.stdout.write(result.stdout as string);
+    if (result.stderr) process.stderr.write(result.stderr as string);
+    if (result.signal === 'SIGTERM' && result.status == null) {
+      process.stderr.write(
+        `[tracegraph audit] ⚠  Command timed out after ${timeoutMs / 1000}s: ${args.join(' ')}\n`,
+      );
+      return { status: EXIT_TIMEOUT, captured };
+    }
+    return { status: result.status ?? 1, captured };
+  }
+}
+
+/**
+ * G19: Extract the first meaningful boot/startup error from captured test-run
+ * output.  Returns the error message as a single string, or null if no
+ * recognisable error pattern is found.
+ *
+ * Patterns recognised:
+ *   PHP artisan:   "In <file> line <n>:\n\n  <message>"
+ *   PHP fatal:     "PHP Fatal error:  <message>"
+ *   PHP exception: "  [<ExceptionType>]\n  <message>"
+ *   Node.js:       "Error: <message>"  /  "Cannot find module '<name>'"
+ *   Python:        "ModuleNotFoundError: ..."  / traceback last line
+ *   Ruby:          "<file>:<n>:in `...': <message>"
+ */
+function extractBootError(output: string): string | null {
+  const lines = output.split('\n');
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
+
+    // ── PHP artisan "In <file> line <n>:" error block ─────────────────────────
+    // The error message appears 1–2 lines after the "In X line N:" header.
+    if (/^\s*In .+ line \d+:/.test(line)) {
+      // Skip blank lines to reach the message
+      let msg = '';
+      for (let j = i + 1; j < Math.min(i + 4, lines.length); j++) {
+        const candidate = (lines[j] ?? '').trim();
+        if (candidate) { msg = candidate; break; }
+      }
+      if (msg) return msg;
+    }
+
+    // ── PHP Fatal / Parse error ────────────────────────────────────────────────
+    const phpFatal = line.match(/PHP (?:Fatal|Parse) error:\s+(.+)/);
+    if (phpFatal) return phpFatal[1]!.trim();
+
+    // ── PHP artisan exception box "[SomeException]\n  message" ────────────────
+    const phpExBox = line.match(/^\s+\[(\w+(?:Exception|Error))\]\s*$/);
+    if (phpExBox) {
+      const nextLine = lines[i + 1]?.trim() ?? '';
+      if (nextLine) return `${phpExBox[1]}: ${nextLine}`;
+    }
+
+    // ── Node.js "Error: ..." or "Cannot find module" ──────────────────────────
+    const nodeErr = line.match(/^(?:Error|TypeError|ReferenceError|SyntaxError|RangeError): (.+)/);
+    if (nodeErr) return line.trim();
+
+    const nodeModule = line.match(/Cannot find module '([^']+)'/);
+    if (nodeModule) return line.trim();
+
+    // ── Python ────────────────────────────────────────────────────────────────
+    const pyErr = line.match(/^(ModuleNotFoundError|ImportError|SyntaxError|RuntimeError): (.+)/);
+    if (pyErr) return line.trim();
+
+    // ── Ruby ─────────────────────────────────────────────────────────────────
+    const rbErr = line.match(/:.+:in `.+': (.+) \(\w+Error\)/);
+    if (rbErr) return line.trim().slice(0, 200);
+  }
+
+  return null;
+}
+
 function gitCmd(args: string[], cwd: string): { ok: boolean; out: string } {
   const result = spawnSync('git', args, {
     cwd,
@@ -1140,10 +1441,526 @@ function gitCmd(args: string[], cwd: string): { ok: boolean; out: string } {
   return { ok: result.status === 0, out: (result.stdout ?? '') + (result.stderr ?? '') };
 }
 
+// ─── Graphifyignore constants ─────────────────────────────────────────────────
+
+/**
+ * Minimal .graphifyignore written before EVERY graphify run during an audit.
+ *
+ * Must always exclude .tracegraph/ — by Phase B, this directory contains
+ * baselines, trace files, graph index JSON, and other audit artifacts.
+ * Graphify will parse JSON files (tree-sitter can extract keys as symbols),
+ * creating hundreds of false nodes from TraceGraph's own output.
+ * node_modules/ and vendor/ (Composer) are always excluded — third-party
+ * packages are noise-only and scanning them can cause timeout on large repos.
+ */
+const BASE_GRAPHIFYIGNORE = `# Auto-generated by TraceGraph audit — safe to delete.
+# Excludes TraceGraph's own output directories from graphify scanning.
+.tracegraph/
+graphify-out/
+node_modules/
+vendor/
+`;
+
+/**
+ * Full code-only .graphifyignore written when `graph build` fails because
+ * non-code files (docs, images, YAML, HTML…) require an LLM API key.
+ * Replaces the BASE_GRAPHIFYIGNORE on retry so graphify runs on source only
+ * (tree-sitter, no key needed).
+ * Includes all BASE_GRAPHIFYIGNORE exclusions.
+ */
+const CODE_ONLY_GRAPHIFYIGNORE = `# Auto-generated by TraceGraph — code-only mode (no API key available).
+# Excludes non-code files so Graphify can run without an LLM backend.
+# Delete this file and set ANTHROPIC_API_KEY (or GEMINI_API_KEY) to include docs.
+
+# ── TraceGraph output directories (always excluded) ───────────────────────────
+.tracegraph/
+graphify-out/
+node_modules/
+
+# ── Docs / text ───────────────────────────────────────────────────────────────
+*.md
+*.markdown
+*.txt
+*.rst
+*.adoc
+*.asciidoc
+
+# ── HTML & templates (Graphify docs category) ─────────────────────────────────
+*.html
+*.htm
+*.xhtml
+*.ejs
+*.pug
+*.jade
+*.hbs
+*.handlebars
+*.mustache
+*.njk
+*.jinja
+*.jinja2
+*.twig
+
+# ── YAML / XML / SVG (Graphify docs category) ─────────────────────────────────
+*.yaml
+*.yml
+*.xml
+*.svg
+
+# ── Stylesheets ───────────────────────────────────────────────────────────────
+*.css
+*.scss
+*.sass
+*.less
+*.styl
+
+# ── PDFs and office docs ──────────────────────────────────────────────────────
+*.pdf
+*.docx
+*.pptx
+*.xlsx
+*.odt
+*.ods
+*.odp
+*.pages
+*.numbers
+*.key
+*.epub
+
+# ── Images ────────────────────────────────────────────────────────────────────
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.webp
+*.ico
+*.bmp
+*.tiff
+*.tif
+*.avif
+*.heic
+*.eps
+*.psd
+*.ai
+
+# ── Audio / video ─────────────────────────────────────────────────────────────
+*.mp4
+*.mp3
+*.wav
+*.mov
+*.avi
+*.mkv
+*.webm
+*.ogg
+*.flac
+*.m4a
+
+# ── MDX / rich-text formats ──────────────────────────────────────────────────
+*.mdx
+*.tex
+*.bib
+*.ipynb
+
+# ── Config / schema formats that graphify may classify as docs ────────────────
+*.toml
+*.graphql
+*.gql
+*.lock
+*.snap
+*.map
+
+# ── Common no-extension documentation files ───────────────────────────────────
+LICENSE
+LICENCE
+CHANGELOG
+AUTHORS
+NOTICE
+COPYING
+CONTRIBUTING
+ROADMAP
+SECURITY
+CODEOWNERS
+
+# ── Common non-code directories ───────────────────────────────────────────────
+docs/
+documentation/
+doc/
+papers/
+assets/
+images/
+media/
+static/
+.github/
+
+# ── Laravel / PHP-specific ────────────────────────────────────────────────────
+# vendor/           — Composer third-party packages (same as node_modules/).
+#   Can contain thousands of PHP files; scanning them causes timeouts and adds
+#   noise.  Always excluded — already in BASE_GRAPHIFYIGNORE but listed here
+#   for clarity when this file replaces it.
+vendor/
+# resources/views/  — Blade templates (*.blade.php): tree-sitter parses them as
+#   PHP but Graphify may classify them as HTML/doc files requiring semantic
+#   extraction.  Exclude the entire views directory in code-only mode.
+resources/views/
+# lang/             — Translation strings (PHP arrays / JSON).  No business
+#   logic; thousands of string constants add noise to the graph.
+lang/
+# public/           — Front-end compiled assets, images, favicons, etc.
+public/
+# storage/          — Laravel logs, cached blade views, uploaded user files.
+storage/
+# bootstrap/cache/  — Compiled config/route caches, not source code.
+bootstrap/cache/
+`.trimStart();
+
+/**
+ * Reads the actual capture-level.json from the most-recently-written run
+ * directory under `.tracegraph/runs/`.  Returns a display string like
+ * "Level 5 — PHPUnit extension (per-test traces + test structure + results)"
+ * or null if nothing is found.
+ *
+ * Call this after `tracegraph run` completes so the audit summary reflects
+ * what was *actually* captured rather than the pre-run configured level.
+ */
+function readActualCaptureLevel(repoDir: string): string | null {
+  // ── Primary path: runs/<runId>/capture-level.json ────────────────────────
+  // Written by the reporter when the test suite completes normally.
+  const runsDir = path.join(repoDir, '.tracegraph', 'runs');
+  if (fs.existsSync(runsDir)) {
+    let latestMtime = -1;
+    let latestRun   = '';
+    try {
+      for (const entry of fs.readdirSync(runsDir)) {
+        const full = path.join(runsDir, entry);
+        if (!fs.statSync(full).isDirectory()) continue;
+        const mtime = fs.statSync(full).mtimeMs;
+        if (mtime > latestMtime) { latestMtime = mtime; latestRun = full; }
+      }
+    } catch { /* fall through to trace-file fallback */ }
+
+    if (latestRun) {
+      const clPath = path.join(latestRun, 'capture-level.json');
+      if (fs.existsSync(clPath)) {
+        try {
+          const data = JSON.parse(fs.readFileSync(clPath, 'utf8')) as { overall?: number; label?: string };
+          if (typeof data.overall === 'number') {
+            const label = data.label ? ` — ${data.label}` : '';
+            return `Level ${data.overall}${label}`;
+          }
+        } catch { /* fall through */ }
+      }
+    }
+  }
+
+  // ── Fallback: read captureLevel from the most recent trace file ───────────
+  // capture-level.json is only written when the PHPUnit/Jest extension runs to
+  // completion.  When tests fail at bootstrap (0 assertions, DB errors, etc.)
+  // the extension never fires its finished-subscriber, so the file is absent.
+  // The trace file itself always records the achieved captureLevel because the
+  // CLI finalises it regardless of how the test process exits.
+  const tracesDir = path.join(repoDir, '.tracegraph', 'traces');
+  if (!fs.existsSync(tracesDir)) return null;
+
+  let latestTraceMtime = -1;
+  let latestTraceFile  = '';
+  try {
+    for (const f of fs.readdirSync(tracesDir)) {
+      if (!f.endsWith('.trace.json')) continue;
+      const full  = path.join(tracesDir, f);
+      const mtime = fs.statSync(full).mtimeMs;
+      if (mtime > latestTraceMtime) { latestTraceMtime = mtime; latestTraceFile = full; }
+    }
+  } catch { return null; }
+  if (!latestTraceFile) return null;
+
+  try {
+    const data = JSON.parse(fs.readFileSync(latestTraceFile, 'utf8')) as {
+      captureLevel?: { overall?: number; label?: string };
+    };
+    const cl = data.captureLevel;
+    if (!cl || typeof cl.overall !== 'number') return null;
+    const label = cl.label ? ` — ${cl.label}` : '';
+    return `Level ${cl.overall}${label}`;
+  } catch { return null; }
+}
+
+/**
+ * Run `tracegraph graph build --quiet` with automatic code-only retry.
+ *
+ * If the first attempt fails because non-code files require an LLM API key,
+ * this function:
+ *   1. Writes a temporary .graphifyignore excluding all doc/image types
+ *   2. Clears graphify-out/ (Graphify's SHA256 file cache) so it rescans
+ *   3. Retries graph build — succeeds with code files only
+ *   4. Removes the temporary .graphifyignore
+ *
+ * Returns true if graph build succeeded (either attempt).
+ */
+function runGraphBuild(
+  repoDir:   string,
+  extraEnv:  Record<string, string>,
+  timeoutMs: number,
+  log:       (s: string) => void,
+  warn:      (s: string) => void,
+): boolean {
+  // Static graph builds are I/O-bound tree-sitter passes over all source files.
+  // Large repos (invoiceninja, akaunting) regularly need 5–10 minutes.
+  // Use the larger of the user's --timeout or a 600s floor so the graph build
+  // isn't killed by a short timeout set for the test phase.
+  const graphBuildTimeoutMs = Math.max(timeoutMs, 600_000);
+
+  const ignorePath     = path.join(repoDir, '.graphifyignore');
+  const hadIgnore      = fs.existsSync(ignorePath);
+  const graphifyOutDir = path.join(repoDir, 'graphify-out');
+
+  // ── Write base .graphifyignore before every first attempt ─────────────────
+  // Always exclude .tracegraph/ so graphify never scans our JSON artifacts
+  // (baselines, trace files, graph index) as source code.  This is critical
+  // for Phase B runs where .tracegraph/ is fully populated from Phase A.
+  if (!hadIgnore) {
+    fs.writeFileSync(ignorePath, BASE_GRAPHIFYIGNORE, 'utf8');
+  }
+
+  // ── First attempt ──────────────────────────────────────────────────────────
+  const firstExit = runTracegraph(['graph', 'build', '--quiet'], repoDir, extraEnv, graphBuildTimeoutMs);
+
+  if (firstExit === 0) {
+    // Remove the temp ignore — leave user's own .graphifyignore untouched.
+    if (!hadIgnore) {
+      try { fs.unlinkSync(ignorePath); } catch { /* non-fatal */ }
+    }
+    return true;
+  }
+
+  // ── Retry: expand to full code-only ignore + clear stale cache ────────────
+  warn('Graph build failed — retrying in code-only mode (excluding non-code files)...');
+
+  // Always write CODE_ONLY_GRAPHIFYIGNORE for the retry — even when the repo
+  // already has its own .graphifyignore.  That file is what caused the first
+  // attempt to fail (its exclusions weren't broad enough to skip all the
+  // doc/image files that require an LLM key).  Save the original and restore
+  // it after the retry so future graph build runs aren't affected.
+  let savedIgnore: string | null = null;
+  if (hadIgnore) {
+    try { savedIgnore = fs.readFileSync(ignorePath, 'utf8'); } catch { /* best-effort */ }
+  }
+  fs.writeFileSync(ignorePath, CODE_ONLY_GRAPHIFYIGNORE, 'utf8');
+
+  // Clear Graphify's SHA256 file cache so it rescans with the new ignore rules.
+  if (fs.existsSync(graphifyOutDir)) {
+    try { fs.rmSync(graphifyOutDir, { recursive: true, force: true }); } catch { /* non-fatal */ }
+  }
+
+  const retryExit = runTracegraph(['graph', 'build', '--quiet'], repoDir, extraEnv, graphBuildTimeoutMs);
+
+  // Restore original .graphifyignore (or remove the temp file we wrote).
+  if (hadIgnore && savedIgnore !== null) {
+    try { fs.writeFileSync(ignorePath, savedIgnore, 'utf8'); } catch { /* best-effort */ }
+  } else if (!hadIgnore) {
+    try { fs.unlinkSync(ignorePath); } catch { /* non-fatal */ }
+  }
+
+  if (retryExit === 0) {
+    log('Static graph built (code files only — set an API key env var to include docs).');
+    return true;
+  }
+
+  // ── Diagnostic: find graph.json anywhere in the repo ─────────────────────
+  // The retry exited non-zero.  Search shallow (depth 4, skip node_modules)
+  // to find where (if anywhere) Graphify actually wrote graph.json.
+  const graphJsonFound = findFileShallow(repoDir, 'graph.json', 4);
+  if (graphJsonFound) {
+    warn(`graph.json found at unexpected path: ${graphJsonFound}`);
+    warn('Set staticGraph.buildCommand in tracegraph.config.json to target that directory.');
+  } else {
+    warn('graph.json not found anywhere in the repo after retry — graphify produced no output.');
+    // Show what is in graphify-out/ if it was created
+    const gOut = path.join(repoDir, 'graphify-out');
+    if (fs.existsSync(gOut)) {
+      const contents = (() => { try { return fs.readdirSync(gOut).join(', '); } catch { return '(unreadable)'; } })();
+      warn(`graphify-out/ exists but contains: ${contents || '(empty)'}`);
+    } else {
+      warn('graphify-out/ was not created — graphify may have found no processable files.');
+    }
+  }
+
+  return false;
+}
+
+/** Recursively search for a file, skipping node_modules/.git/.tracegraph. Max depth. */
+function findFileShallow(dir: string, name: string, depth: number): string | null {
+  if (depth <= 0) return null;
+  try {
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    for (const e of entries) {
+      if (e.isFile() && e.name === name) return path.join(dir, e.name);
+      if (e.isDirectory() && e.name !== 'node_modules' && e.name !== '.git' && e.name !== '.tracegraph') {
+        const found = findFileShallow(path.join(dir, e.name), name, depth - 1);
+        if (found) return found;
+      }
+    }
+  } catch { /* permission error etc */ }
+  return null;
+}
+
 function hasTraces(repoDir: string): boolean {
   const tracesDir = path.join(repoDir, '.tracegraph', 'traces');
   if (!fs.existsSync(tracesDir)) return false;
   return fs.readdirSync(tracesDir).some((f) => f.endsWith('.trace.json'));
+}
+
+/**
+ * Like `runTracegraph` but captures stdout (stderr still flows to terminal).
+ * Used to capture `--json` output from sub-commands while still showing
+ * human-readable stderr output to the user.
+ */
+function captureTracegraph(
+  args:      string[],
+  cwd:       string,
+  extraEnv?: Record<string, string>,
+  timeoutMs = 60_000,
+): { status: number; stdout: string } {
+  const env: Record<string, string> = {
+    ...(process.env as Record<string, string>),
+    TRACEGRAPH_NO_INJECT: '1',
+    ...extraEnv,
+  };
+  const result = spawnSync(process.execPath, [TG_BIN, ...args], {
+    cwd,
+    stdio:    ['inherit', 'pipe', 'inherit'],
+    env,
+    timeout:  timeoutMs,
+    encoding: 'utf8',
+    shell:    false,
+  });
+  return {
+    status: result.status ?? 1,
+    stdout: (result.stdout as string | null) ?? '',
+  };
+}
+
+/**
+ * Read static graph metadata counts from the repo's .tracegraph/static-graph/
+ * directory after a successful `graph build`.
+ */
+function readGraphMeta(repoDir: string): {
+  nodeCount: number; edgeCount: number; communityCount: number; godNodeCount: number;
+  runtimeEdgeCount?: number;
+} | null {
+  try {
+    const p = path.join(repoDir, '.tracegraph', 'static-graph', 'graph_metadata.json');
+    const raw = JSON.parse(fs.readFileSync(p, 'utf8')) as {
+      nodeCount: number; edgeCount: number; communityCount: number; godNodeCount: number;
+      runtimeEdgeCount?: number;
+    };
+    return raw;
+  } catch { return null; }
+}
+
+// ─── Phase 2: runtime call-edge collection ─────────────────────────────────────
+
+/**
+ * Read `call_edges.json` from the most recently modified run directory under
+ * `.tracegraph/runs/`.  Call this immediately after each `tracegraph run`
+ * invocation — at that point the newest run dir is the one we just created.
+ *
+ * Returns an empty array when Phase 2 was not active (no call_edges.json)
+ * or when the run directory cannot be found.
+ */
+function collectCallEdgesFromLatestRun(
+  repoDir: string,
+): Array<{ caller: string; callee: string }> {
+  const runsDir = path.join(repoDir, '.tracegraph', 'runs');
+  if (!fs.existsSync(runsDir)) return [];
+
+  let latestMtime = -1;
+  let latestRun   = '';
+  try {
+    for (const entry of fs.readdirSync(runsDir)) {
+      const full = path.join(runsDir, entry);
+      if (!fs.statSync(full).isDirectory()) continue;
+      const mtime = fs.statSync(full).mtimeMs;
+      if (mtime > latestMtime) { latestMtime = mtime; latestRun = full; }
+    }
+  } catch { return []; }
+
+  if (!latestRun) return [];
+
+  const edgesPath = path.join(latestRun, 'call_edges.json');
+  if (!fs.existsSync(edgesPath)) return [];
+
+  try {
+    const raw = JSON.parse(fs.readFileSync(edgesPath, 'utf8')) as Array<{
+      caller: string;
+      callee: string;
+    }>;
+    return Array.isArray(raw) ? raw : [];
+  } catch { return []; }
+}
+
+/**
+ * Resolve accumulated raw PHP call edges (caller/callee FQN pairs) through the
+ * GraphIndex and write the resolved NormalizedEdge array to
+ * `.tracegraph/static-graph/runtime_call_edges.json`.
+ *
+ * Also patches `graph_metadata.json` with `runtimeEdgeCount` so compare.ts
+ * can know how many runtime edges were resolved without re-reading the file.
+ *
+ * No-ops (with a logged warning) when the graph index cannot be loaded.
+ */
+function writeRuntimeCallEdgesIfAny(
+  repoDir:   string,
+  rawEdges:  Array<{ caller: string; callee: string }>,
+  log:       (msg: string) => void,
+  warn:      (msg: string) => void,
+): void {
+  if (rawEdges.length === 0) return;
+
+  const graphIndex = loadOrRebuildGraphIndex(repoDir);
+  if (!graphIndex) {
+    warn('Phase 2: graph index not available — runtime call edges will not be resolved.');
+    return;
+  }
+
+  const result = importRuntimeCallEdges(rawEdges, graphIndex);
+
+  if (result.edges.length === 0) {
+    warn(
+      `Phase 2: ${rawEdges.length} raw call edges collected but 0 resolved to graph nodes.\n` +
+      `  Unmatched: ${result.unmatchedCount}. ` +
+      `  This usually means graphify used different FQN formats than debug_backtrace() produces.\n` +
+      `  Check that graphify extracted method-level nodes (not file-level only).`,
+    );
+    return;
+  }
+
+  // Write runtime_call_edges.json
+  const outPath = runtimeCallEdgesPath(repoDir);
+  try {
+    fs.writeFileSync(
+      outPath,
+      JSON.stringify(result.edges, null, 2) + '\n',
+      'utf8',
+    );
+    log(
+      `Phase 2: ${result.edges.length} runtime call edges resolved ` +
+      `(${result.unmatchedCount} unmatched) → ${path.relative(repoDir, outPath)}`,
+    );
+  } catch (err) {
+    warn(`Phase 2: failed to write runtime_call_edges.json: ${String(err)}`);
+    return;
+  }
+
+  // Patch graph_metadata.json with runtimeEdgeCount
+  try {
+    const metaPath = graphMetadataPath(repoDir);
+    if (fs.existsSync(metaPath)) {
+      const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8')) as Record<string, unknown>;
+      meta['runtimeEdgeCount'] = result.edges.length;
+      fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2) + '\n', 'utf8');
+    }
+  } catch (err) {
+    warn(`Phase 2: failed to patch graph_metadata.json with runtimeEdgeCount: ${String(err)}`);
+  }
 }
 
 // ─── Main command ─────────────────────────────────────────────────────────────
@@ -1262,10 +2079,25 @@ export async function auditCommand(
   // ── 6. Clone ────────────────────────────────────────────────────────────────
   const repoDir = path.join(workspaceDir, repo);
   log(`Cloning ${cloneUrl}...`);
-  const cloneResult = run(['git', 'clone', '--depth=50', cloneUrl, repoDir], workspaceDir,
-    { timeoutMs: 120_000 });
-  if (cloneResult !== 0) {
-    process.stderr.write('[tracegraph audit] git clone failed.\n');
+  let cloneOk = false;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    if (attempt > 1) {
+      log(`Clone attempt ${attempt}/3 (retrying after network interruption)...`);
+      await new Promise((r) => setTimeout(r, 5_000));
+      // Remove the partial clone directory before retrying
+      try { fs.rmSync(repoDir, { recursive: true, force: true }); } catch { /* ignore */ }
+    }
+    const depth = attempt === 1 ? 50 : 1;
+    const cloneResult = run(
+      ['git', 'clone', `--depth=${depth}`, cloneUrl, repoDir],
+      workspaceDir,
+      { timeoutMs: 180_000 },
+    );
+    if (cloneResult === 0) { cloneOk = true; break; }
+    warn(`git clone failed (attempt ${attempt}/3).`);
+  }
+  if (!cloneOk) {
+    process.stderr.write('[tracegraph audit] git clone failed after 3 attempts.\n');
     return EXIT_CODES.CLI_ERROR;
   }
 
@@ -1278,40 +2110,94 @@ export async function auditCommand(
   // ── 7. Detect stack ──────────────────────────────────────────────────────────
   const stack = detectStack(repoDir);
   log(`Stack detected: ${stack.language}/${stack.framework}  test runner: ${stack.testRunner ?? 'unknown'}`);
-  log(`Test command: ${stack.rawTestCmd}`);
+  log(`Test command: ${stack.rawTestCmd || '(none detected)'}`);
+
+  // ── G-series state — detect Graphify BEFORE abort decisions ──────────────
+  // When Graphify is available, a failing install or missing test suite degrades
+  // to static-only mode (A0 → B → D1) rather than aborting the audit entirely.
+  let graphifyAvailable = false;
+  let graphBuildBaseOk  = false;
+  let archBaselineOk    = false;
+  let graphBuildPrOk    = false;
+  let graphMeta: { nodeCount: number; edgeCount: number; communityCount: number; godNodeCount: number; runtimeEdgeCount?: number } | null = null;
+  let archDiffResult: {
+    totalChanges: number; hasCriticalChanges: boolean; newCrossEdges: number; newGodNodes: number;
+    /** Edge count in the current (PR-branch) graph. 0 = A1 quality. */
+    currentEdgeCount: number;
+    /** G15: Node count of the base-branch graph for base→PR comparison in the banner. */
+    baselineNodeCount: number;
+  } | null = null;
+  // G14: test run exit codes — lifted to outer scope so banner + pr-context can read them
+  let baselineRunCode = 0;
+  let prRunCode       = 0;
+  // G19: captured output from the PR run (for boot-error extraction); null until set
+  let prRunCaptured: string | null = null;
+  // Phase 2: accumulated raw PHP call edges from all test runs (base + PR branch).
+  // Each entry is a {caller, callee} FQN pair collected from debug_backtrace().
+  // Resolved to NormalizedEdge objects and written to runtime_call_edges.json
+  // after Phase C (before compare).
+  const accumulatedCallEdges: Array<{ caller: string; callee: string }> = [];
+
+  if (!opts.skipGraph) {
+    const gDetect = detectGraphify();
+    graphifyAvailable = gDetect.found;
+    if (graphifyAvailable) {
+      log(`Graphify ${gDetect.version ?? '(version unknown)'} detected — architecture analysis enabled`);
+    } else {
+      log('Graphify not found — architecture analysis skipped  (install: uv tool install graphifyy)');
+    }
+  }
+
+  // ── Testing availability ──────────────────────────────────────────────────
+  // testingAvailable=false → Phases A/C/D are skipped; A0/B/D1 still run.
+  // Set to false when there is no test infrastructure but Graphify can still
+  // deliver static architecture value (install fails, no test script, etc.).
+  let testingAvailable  = true;
+  let testingSkipReason = '';
 
   if (stack.language === 'unknown') {
-    warn('Unrecognised project stack. Cannot run tests without a known test command.');
-    return EXIT_CODES.CLI_ERROR;
-  }
-  if (!stack.rawTestCmd) {
-    warn(
-      'No self-contained test script found in this repository.\n' +
-      '  The audit command requires a test suite that:\n' +
-      '    ✓  Runs without a live database, browser, or external services\n' +
-      '    ✓  Exits automatically when done (no file watchers / dev servers)\n' +
-      '    ✓  Does not require CI-specific env vars (GITHUB_REF_NAME etc.)\n' +
-      '\n' +
-      '  This repo may be:\n' +
-      '    • A monorepo whose root "test" is a CI orchestration script\n' +
-      '    • A project with database-dependent integration tests only\n' +
-      '    • An E2E-only project (Playwright / Cypress)\n' +
-      '\n' +
-      '  Candidates we detected but skipped:\n' +
-      `    ${Object.keys((JSON.parse(fs.readFileSync(path.join(repoDir, 'package.json'), 'utf8')) as Record<string, Record<string, string>>)['scripts'] ?? {})
-          .filter((k) => /test|spec|unit/i.test(k))
-          .join(', ') || '(none)'}\n` +
-      '\n' +
-      '  Phase 2 of tracegraph audit (with service stubs) will handle these repos.',
-    );
-    return EXIT_CODES.CLI_ERROR;
+    if (!graphifyAvailable) {
+      warn('Unrecognised project stack. Cannot run tests without a known test command.');
+      return EXIT_CODES.CLI_ERROR;
+    }
+    testingAvailable  = false;
+    testingSkipReason = 'unrecognised project stack';
+    warn('Unrecognised project stack — runtime analysis skipped. Static architecture analysis will continue.');
   }
 
-  // ── 7b. Runtime pre-flight checks ───────────────────────────────────────────
-  // Verify that the required runtime is reachable before spending time on install.
-  // PHP is only available on Windows (not in WSL on this machine) — give a clear,
-  // actionable error rather than a cryptic "php: not found" from composer.
-  if (stack.language === 'php') {
+  if (!stack.rawTestCmd && testingAvailable) {
+    if (!graphifyAvailable) {
+      warn(
+        'No self-contained test script found in this repository.\n' +
+        '  The audit command requires a test suite that:\n' +
+        '    ✓  Runs without a live database, browser, or external services\n' +
+        '    ✓  Exits automatically when done (no file watchers / dev servers)\n' +
+        '    ✓  Does not require CI-specific env vars (GITHUB_REF_NAME etc.)\n' +
+        '\n' +
+        '  This repo may be:\n' +
+        '    • A monorepo whose root "test" is a CI orchestration script\n' +
+        '    • A project with database-dependent integration tests only\n' +
+        '    • An E2E-only project (Playwright / Cypress)\n' +
+        '\n' +
+        '  Candidates we detected but skipped:\n' +
+        `    ${Object.keys((JSON.parse(fs.readFileSync(path.join(repoDir, 'package.json'), 'utf8')) as Record<string, Record<string, string>>)['scripts'] ?? {})
+            .filter((k) => /test|spec|unit/i.test(k))
+            .join(', ') || '(none)'}\n` +
+        '\n' +
+        '  Phase 2 of tracegraph audit (with service stubs) will handle these repos.',
+      );
+      return EXIT_CODES.CLI_ERROR;
+    }
+    testingAvailable  = false;
+    testingSkipReason = 'no self-contained test script found';
+    warn(
+      'No self-contained test script found — runtime analysis will be skipped.\n' +
+      '  Static architecture analysis (Phases A0, B graph rebuild, D1) will continue.',
+    );
+  }
+
+  // ── 7b. Runtime pre-flight checks (only when tests will run) ─────────────
+  if (testingAvailable && stack.language === 'php') {
     const phpCheck = spawnSync('php', ['--version'], {
       encoding: 'utf8',
       timeout:  5_000,
@@ -1332,107 +2218,146 @@ export async function auditCommand(
     }
     const phpVersion = (phpCheck.stdout as string).split('\n')[0]?.trim() ?? 'unknown';
     log(`PHP runtime: ${phpVersion}`);
-  }
 
-  // ── 8. Resolve tracegraph instrumentation paths ──────────────────────────────
-  const tgPaths = resolveTracegraphPaths();
-  // eslint-disable-next-line prefer-const
-  let { testCmd, nodeOptions, captureLevel } = buildInstrumentation(stack, tgPaths, repoDir);
-  log(`Capture level (pre-injection): ${captureLevel}`);
-  if (nodeOptions) log(`NODE_OPTIONS: ${nodeOptions}`);
-
-  const extraEnv: Record<string, string> = {};
-  if (nodeOptions) extraEnv['NODE_OPTIONS'] = nodeOptions;
-
-  // ── 9. Install dependencies ────────────────────────────────────────────────
-
-  // pnpm 10+ "Secure Builds": new packages with build scripts require interactive
-  // approval.  In the non-interactive audit environment, pre-configure the repo's
-  // .npmrc to disable the check.  This is safe because we're already running the
-  // repo's test suite, so executing build scripts is within the audit's scope.
-  const usesPnpm = stack.installCmds.some((cmd) => cmd[0] === 'pnpm');
-  if (usesPnpm && stack.language === 'node') {
-    const npmrcPath = path.join(repoDir, '.npmrc');
-    const AUDIT_ENTRY = 'allow-build-scripts-check=false';
-    const existing = fs.existsSync(npmrcPath) ? fs.readFileSync(npmrcPath, 'utf8') : '';
-    if (!existing.includes(AUDIT_ENTRY)) {
-      fs.appendFileSync(npmrcPath, `\n# Added by tracegraph audit\n${AUDIT_ENTRY}\n`, 'utf8');
-    }
-  }
-
-  for (const installCmd of stack.installCmds) {
-    log(`Installing dependencies: ${installCmd.join(' ')}`);
-    const rc = run(installCmd, repoDir, { timeoutMs: 300_000 });
-    if (rc !== 0) {
-      // Node.js and PHP: a failed install is always fatal.
-      //   Node.js: devDependencies (vitest, jest, mocha) won't be in node_modules/.bin
-      //   PHP:     vendor/bin/phpunit won't exist and we can't detect PHPUnit version
-      // Abort early rather than silently producing empty Level 0 traces.
-      if (stack.language === 'node') {
-        process.stderr.write(
-          `[tracegraph audit] Dependency install failed (exit ${rc}).\n` +
-          '  Tests cannot run without installed devDependencies.\n' +
-          '  Common causes:\n' +
-          '    • Peer dependency conflicts — check npm output above\n' +
-          '    • This is a monorepo root; the test runner lives in a sub-package\n' +
-          '    • Private registry or authentication required\n' +
-          '    • Node.js version mismatch (check .nvmrc or engines field)\n',
-        );
-        return EXIT_CODES.CLI_ERROR;
-      }
-      if (stack.language === 'php') {
-        process.stderr.write(
-          `[tracegraph audit] composer install failed (exit ${rc}).\n` +
-          '  Tests cannot run without the vendor/ directory.\n' +
-          '  Common causes:\n' +
-          '    • PHP version mismatch — check composer.json "require" → "php" constraint\n' +
-          '    • Private Packagist repository or authentication required\n' +
-          '    • Composer itself is missing or not in PATH\n',
-        );
-        return EXIT_CODES.CLI_ERROR;
-      }
-      warn(`Dependency install returned non-zero (exit ${rc}). Continuing.`);
-    }
-  }
-
-  // ── 9b. Optional workspace build step ─────────────────────────────────────
-  // Compiles internal workspace packages needed by the test suite.
-  // This is NON-FATAL: full-stack app packages (Next.js web, databases) often
-  // fail here because they need secrets (DATABASE_URL, REDIS_URL, etc.) that
-  // aren't available in the audit sandbox.  Turbo / nx build in dependency
-  // order, so library packages that tests import will have built successfully
-  // before the app package fails.  We warn and continue.
-  for (const buildCmd of stack.buildCmds) {
-    log(`Building workspace packages: ${buildCmd.join(' ')}`);
-    const rc = run(buildCmd, repoDir, { timeoutMs: 600_000 });
-    if (rc !== 0) {
+    // Check pdo_sqlite — needed for Laravel's default in-memory SQLite test DB.
+    // Missing pdo_sqlite causes every test to fail with "could not find driver"
+    // before PHPUnit even starts executing, resulting in captureLevel 0.
+    const sqliteCheck = spawnSync(
+      'php',
+      ['-r', "new PDO('sqlite::memory:'); echo 'ok';"],
+      { encoding: 'utf8', timeout: 5_000, shell: process.platform === 'win32' },
+    );
+    if ((sqliteCheck.stdout as string).trim() !== 'ok') {
       warn(
-        `Workspace build returned non-zero (exit ${rc}).\n` +
-        '  Some packages may have failed to build (e.g. Next.js app needing secrets).\n' +
-        '  Continuing — the test suite may still work if the required packages built.',
+        'PHP pdo_sqlite extension is not available.\n' +
+        '  Most Laravel / PHPUnit test suites use SQLite :memory: as the test database.\n' +
+        '  Without pdo_sqlite, all tests fail immediately with "could not find driver"\n' +
+        '  and no traces are captured (capture level stays at 0).\n' +
+        '  Install on Debian/Ubuntu:  sudo apt-get install php-sqlite3\n' +
+        '  Install on RHEL/CentOS:    sudo yum install php-pdo_sqlite\n' +
+        '  Continuing — some tests may still produce useful traces if they use another DB.',
       );
     }
   }
 
-  // ── 9c. Invasive instrumentation injection ────────────────────────────────
-  //
-  // PHP repos:  modify phpunit.xml to register our PHPUnit 10/11 extension.
-  //             Done AFTER install so vendor/phpunit/phpunit/composer.json exists
-  //             and we can detect the major version before injecting.
-  //
-  // TypeScript/Vitest repos:  write vitest.config.tracegraph.ts (untracked) that
-  //             extends the repo's own config with our reporter, then override the
-  //             test command to pass --config to vitest through the package script.
-  //             Done AFTER install so node_modules/vitest is available.
-  //
-  // Both approaches only create untracked files or modify phpunit.xml (which is
-  // either a new untracked copy of .dist, or gets re-injected before Phase C).
+  // ── 8. Resolve tracegraph instrumentation paths (only when tests will run) ─
+  let testCmd: string[]         = [];
+  let nodeOptions: string | null = null;
+  let captureLevel               = 'N/A (runtime analysis unavailable)';
+  const extraEnv: Record<string, string> = {};
 
-  let phpAdapterSrc:    string | null = null;
-  let phpInjected       = false;
-  let invasiveTsConfig  = false;
+  // Hoisted so invasive-injection block (9c) can reference it when testingAvailable is true.
+  let tgPaths: ReturnType<typeof resolveTracegraphPaths> | null = null;
 
-  if (stack.language === 'php') {
+  if (testingAvailable) {
+    tgPaths       = resolveTracegraphPaths();
+    const instr   = buildInstrumentation(stack, tgPaths, repoDir);
+    testCmd      = instr.testCmd;
+    nodeOptions  = instr.nodeOptions;
+    captureLevel = instr.captureLevel;
+    log(`Capture level (pre-injection): ${captureLevel}`);
+
+    if (nodeOptions) {
+      log(`NODE_OPTIONS: ${nodeOptions}`);
+      // NODE_OPTIONS is intentionally NOT added to extraEnv here.
+      // extraEnv is passed to every runTracegraph call — graph build, scan,
+      // compare, architecture baseline, etc.  Those internal subprocesses must
+      // NOT inherit the CJS interceptor hook, because loading register-cjs.js
+      // inside tracegraph's own subprocesses activates the tracer, which causes
+      // tracegraph scan (and others) to misbehave and can trigger Phase A0 to run
+      // twice.  The hook is only needed by the actual test-runner subprocess —
+      // see testEnv below, which is used only for `tracegraph run -- <testCmd>`.
+    }
+  }
+
+  // ── 9. Install dependencies (only when tests will run) ───────────────────
+  // When testingAvailable=false (no test script / install already failed) skip
+  // the entire install step — Graphify runs directly on source files.
+  if (testingAvailable) {
+    // pnpm 10+ "Secure Builds": new packages with build scripts require interactive
+    // approval.  In the non-interactive audit environment, pre-configure the repo's
+    // .npmrc to disable the check.  This is safe because we're already running the
+    // repo's test suite, so executing build scripts is within the audit's scope.
+    const usesPnpm = stack.installCmds.some((cmd) => cmd[0] === 'pnpm');
+    if (usesPnpm && stack.language === 'node') {
+      const npmrcPath = path.join(repoDir, '.npmrc');
+      const AUDIT_ENTRY = 'allow-build-scripts-check=false';
+      const existing = fs.existsSync(npmrcPath) ? fs.readFileSync(npmrcPath, 'utf8') : '';
+      if (!existing.includes(AUDIT_ENTRY)) {
+        fs.appendFileSync(npmrcPath, `\n# Added by tracegraph audit\n${AUDIT_ENTRY}\n`, 'utf8');
+      }
+    }
+
+    for (const installCmd of stack.installCmds) {
+      log(`Installing dependencies: ${installCmd.join(' ')}`);
+      const rc = run(installCmd, repoDir, { timeoutMs: 300_000 });
+      if (rc !== 0) {
+        // When Graphify is available, a failed install degrades to static-only mode
+        // instead of aborting — architecture analysis can still run on source files.
+        if (graphifyAvailable) {
+          warn(
+            `Dependency install failed (exit ${rc}) — runtime analysis skipped.\n` +
+            '  Static architecture analysis (Phases A0, B graph rebuild, D1) will continue.\n' +
+            '  To enable runtime analysis, resolve the install failure above.',
+          );
+          testingAvailable  = false;
+          testingSkipReason = `dependency install failed (exit ${rc})`;
+          captureLevel      = 'N/A (runtime analysis unavailable)';
+          break;
+        }
+        // Node.js and PHP: a failed install is fatal when no Graphify fallback exists.
+        //   Node.js: devDependencies (vitest, jest, mocha) won't be in node_modules/.bin
+        //   PHP:     vendor/bin/phpunit won't exist and we can't detect PHPUnit version
+        if (stack.language === 'node') {
+          process.stderr.write(
+            `[tracegraph audit] Dependency install failed (exit ${rc}).\n` +
+            '  Tests cannot run without installed devDependencies.\n' +
+            '  Common causes:\n' +
+            '    • Peer dependency conflicts — check npm output above\n' +
+            '    • This is a monorepo root; the test runner lives in a sub-package\n' +
+            '    • Private registry or authentication required\n' +
+            '    • Node.js version mismatch (check .nvmrc or engines field)\n',
+          );
+          return EXIT_CODES.CLI_ERROR;
+        }
+        if (stack.language === 'php') {
+          process.stderr.write(
+            `[tracegraph audit] composer install failed (exit ${rc}).\n` +
+            '  Tests cannot run without the vendor/ directory.\n' +
+            '  Common causes:\n' +
+            '    • PHP version mismatch — check composer.json "require" → "php" constraint\n' +
+            '    • Private Packagist repository or authentication required\n' +
+            '    • Composer itself is missing or not in PATH\n',
+          );
+          return EXIT_CODES.CLI_ERROR;
+        }
+        warn(`Dependency install returned non-zero (exit ${rc}). Continuing.`);
+      }
+    }
+  }
+
+  // ── 9b. Optional workspace build step (only when tests will run) ──────────
+  let phpAdapterSrc:   string | null = null;
+  let phpInjected      = false;
+  let invasiveTsConfig = false;
+
+  if (testingAvailable) {
+    // Compiles internal workspace packages needed by the test suite.
+    for (const buildCmd of stack.buildCmds) {
+      log(`Building workspace packages: ${buildCmd.join(' ')}`);
+      const rc = run(buildCmd, repoDir, { timeoutMs: 600_000 });
+      if (rc !== 0) {
+        warn(
+          `Workspace build returned non-zero (exit ${rc}).\n` +
+          '  Some packages may have failed to build (e.g. Next.js app needing secrets).\n' +
+          '  Continuing — the test suite may still work if the required packages built.',
+        );
+      }
+    }
+  }
+
+  // ── 9c. Invasive instrumentation injection (only when tests will run) ─────
+  if (testingAvailable && stack.language === 'php') {
     phpAdapterSrc = resolvePhpAdapterSrcPath();
     if (!phpAdapterSrc) {
       warn(
@@ -1460,22 +2385,75 @@ export async function auditCommand(
         phpInjected = injectPhpUnitExtension(repoDir, phpAdapterSrc);
         if (phpInjected) {
           captureLevel = `Level 5 invasive (PHPUnit ${phpUnitMajor}.x extension — per-test traces)`;
+          // Phase 2: enable call-edge capture via debug_backtrace() in EventWriter::write().
+          // TRACEGRAPH_INVASIVE=2 activates CallEdgeCapture.php and makes
+          // TestPreparedSubscriber register TraceServiceProvider before each test so
+          // application events (http_request, db_query, auth_check) fire during tests.
+          extraEnv['TRACEGRAPH_INVASIVE'] = '2';
+          log('Phase 2 invasive: TRACEGRAPH_INVASIVE=2 — runtime call-edge capture enabled.');
         }
       }
     }
-  } else if (stack.language === 'node' && stack.testRunner === 'vitest') {
+  } else if (testingAvailable && stack.language === 'node' && stack.testRunner === 'vitest') {
     const baseConfig   = findVitestConfig(repoDir);
-    const reporterPath = tgPaths.vitestReporterMjs ?? tgPaths.vitestReporter;
+    // tgPaths is guaranteed non-null here: testingAvailable=true means the block above ran.
+    const reporterPath = tgPaths!.vitestReporterMjs ?? tgPaths!.vitestReporter;
     if (baseConfig && reporterPath) {
       const reporterFwd = reporterPath.replace(/\\/g, '/');
-      invasiveTsConfig  = writeVitestWrapperConfig(repoDir, baseConfig, reporterFwd);
+
+      // ── Guard 1: workspace config ─────────────────────────────────────────
+      // mergeConfig() is incompatible with defineWorkspace() output.
+      let isWorkspaceConfig = false;
+      try {
+        const configSrc = fs.readFileSync(path.join(repoDir, baseConfig), 'utf8');
+        isWorkspaceConfig = configSrc.includes('defineWorkspace');
+      } catch { /* unreadable — treat as normal config */ }
+
+      // ── Guard 2: test command doesn't call vitest directly ────────────────
+      // The invasive `--config` approach requires that `--config /path` reaches
+      // vitest on the command line.  When the test command is a package-manager
+      // script wrapper (`pnpm run test`, `npm test`, `yarn test`), the flag must
+      // pass through two layers: the outer pnpm/npm invocation and then the
+      // script body.  This is unreliable because:
+      //
+      //   • `pnpm run test -- --config x` → script body gets `--config x`
+      //     If the script body is `pnpm run -r test`, inner pnpm may interpret
+      //     `--config` as its own CLI flag (pnpm has --config.key=value syntax).
+      //
+      //   • vitest's `--` separator is also fragile: some npm-like tools pass
+      //     `-- --config x` to the script literally, so vitest receives `--`
+      //     and treats `--config` as test-file arguments, not a CLI option.
+      //
+      // When the test command calls vitest directly (`vitest`, `npx vitest`,
+      // `./node_modules/.bin/vitest`) invasive injection is safe and preferred.
+      // Otherwise fall back to the non-invasive `--reporter=` flags that
+      // buildInstrumentation already put in testCmd — those travel as simple
+      // script arguments and are reliably forwarded by all package managers.
+      const rawTestParts = stack.rawTestCmd.trim().split(/\s+/);
+      const testCmdHasVitest = rawTestParts.some((p) => /\bvitest\b/i.test(p));
+
+      if (!testCmdHasVitest) {
+        log('Test command wraps a package manager (vitest not called directly).');
+        log('  Non-invasive --reporter flag injection will be used (more reliable for this pattern).');
+      }
+
+      if (isWorkspaceConfig) {
+        log(`${baseConfig} uses defineWorkspace — skipping invasive mergeConfig injection.`);
+        log('  Non-invasive --reporter flag injection (from buildInstrumentation) will be used instead.');
+      } else if (testCmdHasVitest) {
+        invasiveTsConfig = writeVitestWrapperConfig(repoDir, baseConfig, reporterFwd);
+      }
       if (invasiveTsConfig) {
         // Override test command to use the wrapper config.
-        // Appending `-- --config` passes the flag through the package manager script
-        // to vitest (works for npm/pnpm/yarn run; bypasses --reporter= CLI flag for
-        // Turbo repos where extra flags are otherwise swallowed).
+        // Use an absolute path so vitest can locate the file regardless of CWD.
+        // No `--` separator: invasive injection only fires when the test command
+        // calls vitest directly (testCmdHasVitest=true), so `--config` is a
+        // plain vitest CLI option and must NOT be preceded by `--` (vitest
+        // interprets `-- args` as arguments passed to the test files, not
+        // as its own CLI flags).
+        const wrapperAbsPath = path.join(repoDir, 'vitest.config.tracegraph.ts').replace(/\\/g, '/');
         const rawParts   = stack.rawTestCmd.trim().split(/\s+/);
-        testCmd          = [...rawParts, '--', '--config', 'vitest.config.tracegraph.ts'];
+        testCmd          = [...rawParts, '--config', wrapperAbsPath];
         const vitestMajor = declaredMajor(repoDir, 'vitest') ?? '?';
         captureLevel     = `Level 3–5 invasive (Vitest ${vitestMajor}.x wrapper config + per-test traces)`;
         log(`Test command updated for invasive injection: ${testCmd.join(' ')}`);
@@ -1489,60 +2467,170 @@ export async function auditCommand(
 
   log(`Capture level: ${captureLevel}`);
 
+  // ── A0. Static graph + architecture snapshot (base branch) ────────────────
+  if (graphifyAvailable) {
+    log(`\n${'─'.repeat(60)}`);
+    log('PHASE A0 — Static graph + architecture snapshot (base branch)');
+    log(`${'─'.repeat(60)}`);
+
+    // G17.1 — Pre-flight LLM API key check.
+    // Graphify uses an LLM to extract call-graph edges (relationships between
+    // nodes).  Without a key, it produces a node-only (A1) graph which has no
+    // edges and therefore no community or cross-community-edge data.  Warn early
+    // so the user can act before a long build completes with 0 edges.
+    const hasAnthropicKey = !!process.env['ANTHROPIC_API_KEY'];
+    const hasGeminiKey    = !!process.env['GEMINI_API_KEY'];
+    if (!hasAnthropicKey && !hasGeminiKey) {
+      warn(
+        'No LLM API key detected (ANTHROPIC_API_KEY / GEMINI_API_KEY).\n' +
+        '  Graphify will build a node-only graph (A1 quality) — call-graph edges\n' +
+        '  require an LLM key for relationship extraction.\n' +
+        '  Set one of the above environment variables to enable full graph analysis.',
+      );
+    }
+
+    log('Building static graph...');
+    graphBuildBaseOk = runGraphBuild(repoDir, extraEnv, timeoutMs, log, warn);
+
+    if (graphBuildBaseOk) {
+      graphMeta = readGraphMeta(repoDir);
+      if (graphMeta) {
+        log(
+          `  Graph: ${graphMeta.nodeCount.toLocaleString()} nodes  |  ` +
+          `${graphMeta.edgeCount.toLocaleString()} edges  |  ` +
+          `${graphMeta.communityCount} communities  |  ` +
+          `${graphMeta.godNodeCount} god nodes`,
+        );
+        // G17.2 — Post-build edge-count diagnostic.
+        // A graph with nodes but zero edges means edge extraction failed, which is
+        // almost always due to a missing LLM API key.  Log early so CI output is
+        // easy to grep without waiting for the final banner.
+        if (graphMeta.edgeCount === 0 && graphMeta.nodeCount > 0) {
+          const hasKey = !!(process.env['ANTHROPIC_API_KEY'] || process.env['GEMINI_API_KEY']);
+          if (!hasKey) {
+            warn(
+              `Graph has ${graphMeta.nodeCount.toLocaleString()} nodes but 0 edges — ` +
+              'edge extraction requires an LLM API key.\n' +
+              '  Set ANTHROPIC_API_KEY or GEMINI_API_KEY and re-run to enable full analysis.',
+            );
+          } else {
+            warn(
+              `Graph has ${graphMeta.nodeCount.toLocaleString()} nodes but 0 edges.\n` +
+              '  Run `graphify . --verbose` in the repo to diagnose relationship extraction.',
+            );
+          }
+        }
+      }
+      log('Creating architecture baseline...');
+      archBaselineOk = runTracegraph(
+        ['architecture', 'baseline', 'create', '--quiet'],
+        repoDir, extraEnv,
+      ) === 0;
+
+      log('Running baseline-free risk scan...');
+      runTracegraph(['scan'], repoDir, extraEnv);
+    } else {
+      warn('Graph build failed — architecture analysis skipped for this audit.');
+    }
+  }
+
   // ── 10. Baseline run on the base branch ───────────────────────────────────
+  // testEnv extends extraEnv with NODE_OPTIONS for the test-runner subprocess ONLY.
+  // All internal tracegraph subprocesses (graph build, scan, compare, etc.) use
+  // extraEnv directly, which does NOT carry NODE_OPTIONS.
+  const testEnv: Record<string, string> = nodeOptions
+    ? { ...extraEnv, NODE_OPTIONS: nodeOptions }
+    : extraEnv;
+
   log(`\n${'─'.repeat(60)}`);
   log(`PHASE A — Baseline run on ${selectedPR.base?.ref ?? 'main'}`);
   log(`${'─'.repeat(60)}`);
-  log(`Running: tracegraph run -- ${testCmd.join(' ')}`);
 
-  const baselineRunCode = runTracegraph(
-    ['run', '--', ...testCmd],
-    repoDir,
-    extraEnv,
-    timeoutMs,
-  );
+  if (!testingAvailable) {
+    log(`⚠  Runtime baseline skipped (${testingSkipReason}).`);
+    log('  Architecture compare (Phase D1) will still run.');
+  } else {
+    log(`Running: tracegraph run -- ${testCmd.join(' ')}`);
 
-  // Exit 127 = shell "command not found" — test runner binary not installed.
-  // Exit 127 = shell "command not found" (test runner not installed)
-  if (baselineRunCode === 127) {
-    process.stderr.write(
-      '[tracegraph audit] Test runner binary not found (exit 127).\n' +
-      `  Command: ${testCmd.join(' ')}\n` +
-      '  Dependency install may have failed — see npm/yarn output above.\n',
+    baselineRunCode = runTracegraph(
+      ['run', '--', ...testCmd],
+      repoDir,
+      testEnv,   // testEnv carries NODE_OPTIONS; extraEnv (used everywhere else) does not
+      timeoutMs,
     );
-    return EXIT_CODES.CLI_ERROR;
-  }
 
-  // EXIT_TIMEOUT = tracegraph run was killed because the test suite exceeded the timeout.
-  // Partial traces may exist but are unreliable — abort with guidance.
-  if (baselineRunCode === EXIT_TIMEOUT) {
-    return EXIT_CODES.CLI_ERROR;
-  }
+    // Exit 127 = shell "command not found" — test runner binary not installed.
+    if (baselineRunCode === 127) {
+      process.stderr.write(
+        '[tracegraph audit] Test runner binary not found (exit 127).\n' +
+        `  Command: ${testCmd.join(' ')}\n` +
+        '  Dependency install may have failed — see npm/yarn output above.\n',
+      );
+      return EXIT_CODES.CLI_ERROR;
+    }
 
-  if (!hasTraces(repoDir)) {
-    warn(
-      'No traces were captured on the base branch.\n' +
-      '  This may be because:\n' +
-      '    • The test suite requires environment setup (DB, secrets, etc.)\n' +
-      '    • The test command failed to run (check output above)\n' +
-      '    • The project stack requires invasive instrumentation (Phase 2)',
+    // EXIT_TIMEOUT = tracegraph run was killed because the test suite exceeded the timeout.
+    if (baselineRunCode === EXIT_TIMEOUT) {
+      return EXIT_CODES.CLI_ERROR;
+    }
+
+    if (!hasTraces(repoDir)) {
+      warn(
+        'No traces were captured on the base branch.\n' +
+        '  This may be because:\n' +
+        '    • The test suite requires environment setup (DB, secrets, etc.)\n' +
+        '    • The test command failed to run (check output above)\n' +
+        '    • The project stack requires invasive instrumentation (Phase 2)',
+      );
+      return EXIT_CODES.CLI_ERROR;
+    }
+
+    // Read the actual capture level achieved — may differ from the configured level
+    // when tests fail early (e.g. missing pdo_sqlite, boot errors).
+    const actualBaseLevel = readActualCaptureLevel(repoDir);
+    if (actualBaseLevel !== null) {
+      if (actualBaseLevel.startsWith('Level 0') && !captureLevel.startsWith('Level 0')) {
+        warn(
+          `Actual capture level on base branch: ${actualBaseLevel}\n` +
+          `  Configured level was: ${captureLevel}\n` +
+          '  This usually means the tests failed before PHPUnit/Jest could run\n' +
+          '  (e.g. missing PHP extension, DB connection error, framework boot failure).\n' +
+          '  Check the test output above for "could not find driver" or similar errors.',
+        );
+      }
+      captureLevel = actualBaseLevel;
+    }
+
+    if (baselineRunCode !== 0) {
+      warn(`Tests returned exit code ${baselineRunCode} on the base branch.`);
+      warn('Continuing — baseline will be created from whatever traces were captured.');
+    }
+
+    log('Creating baseline...');
+    const baselineCode = runTracegraph(
+      ['baseline', 'create', '--reason', `PR #${selectedPR.number} audit baseline`, '--all'],
+      repoDir,
+      extraEnv,
     );
-    return EXIT_CODES.CLI_ERROR;
-  }
+    if (baselineCode !== 0) {
+      warn('Baseline create returned non-zero. Continuing.');
+    }
 
-  if (baselineRunCode !== 0) {
-    warn(`Tests returned exit code ${baselineRunCode} on the base branch.`);
-    warn('Continuing — baseline will be created from whatever traces were captured.');
-  }
+    if (graphBuildBaseOk) {
+      log('Enriching base branch traces with static metadata...');
+      runTracegraph(['graph', 'enrich', '--all', '--quiet'], repoDir, extraEnv);
+      log('Deriving runtime edges from base branch traces...');
+      runTracegraph(['graph', 'derive-edges', '--quiet'], repoDir, extraEnv);
+    }
 
-  log('Creating baseline...');
-  const baselineCode = runTracegraph(
-    ['baseline', 'create', '--reason', `PR #${selectedPR.number} audit baseline`, '--all'],
-    repoDir,
-    extraEnv,
-  );
-  if (baselineCode !== 0) {
-    warn('Baseline create returned non-zero. Continuing.');
+    // Phase 2: collect call edges from this (base-branch) run.
+    // Must be done BEFORE Phase B checkout since the run dir is in .tracegraph/runs/
+    // which persists across branch checkouts.
+    const baseCallEdges = collectCallEdgesFromLatestRun(repoDir);
+    if (baseCallEdges.length > 0) {
+      log(`Phase 2: collected ${baseCallEdges.length} call edges from base-branch run.`);
+      accumulatedCallEdges.push(...baseCallEdges);
+    }
   }
 
   // ── 11. Apply the PR ──────────────────────────────────────────────────────
@@ -1605,21 +2693,145 @@ export async function auditCommand(
   // TypeScript: vitest.config.tracegraph.ts is untracked — it survived checkout.
   // No re-injection needed.
 
+  // G-series: rebuild static graph for the PR branch code.
+  // The graph was built on the base branch in Phase A0; rebuilding here gives us
+  // the PR branch's architecture so architecture compare can diff them.
+  if (graphBuildBaseOk) {
+    log('Rebuilding static graph for PR branch...');
+    graphBuildPrOk = runGraphBuild(repoDir, extraEnv, timeoutMs, log, warn);
+    if (!graphBuildPrOk) {
+      warn('PR branch graph build failed — architecture compare will be skipped.');
+    } else {
+      // G15.2 — Re-read graphMeta after the PR-branch graph build.
+      // graphMeta was set from the *base* branch build (Phase A0) and reflected
+      // base-branch node/edge counts.  Now that the PR branch has been built,
+      // update graphMeta so that the final banner shows PR-branch metrics and
+      // the base→PR node-count delta is accurate.
+      graphMeta = readGraphMeta(repoDir) ?? graphMeta;
+    }
+  }
+
   // ── 12. Run tests on the PR branch ───────────────────────────────────────
   log(`\n${'─'.repeat(60)}`);
   log(`PHASE C — Running tests on PR #${selectedPR.number}`);
   log(`${'─'.repeat(60)}`);
-  log(`Running: tracegraph run -- ${testCmd.join(' ')}`);
 
-  const prRunCode = runTracegraph(
-    ['run', '--', ...testCmd],
-    repoDir,
-    extraEnv,
-    timeoutMs,
-  );
-  if (prRunCode !== 0) {
-    warn(`Tests returned exit code ${prRunCode} on the PR branch.`);
-    warn('Continuing with compare — findings are still valid.');
+  if (!testingAvailable) {
+    log(`⚠  Runtime tests skipped (${testingSkipReason}).`);
+  } else {
+    log(`Running: tracegraph run -- ${testCmd.join(' ')}`);
+
+    // G19: use the tee-capturing variant so we can extract boot errors from the
+    // output while still streaming everything to the terminal in real-time.
+    const prRunResult = runTracegraphCapturing(
+      ['run', '--', ...testCmd],
+      repoDir,
+      testEnv,   // testEnv carries NODE_OPTIONS; extraEnv (used everywhere else) does not
+      timeoutMs,
+    );
+    prRunCode      = prRunResult.status;
+    prRunCaptured  = prRunResult.captured;
+
+    // Update captureLevel with what was actually captured on the PR branch.
+    // Phase C level takes precedence — it's the run we're comparing against.
+    const actualPrLevel = readActualCaptureLevel(repoDir);
+    if (actualPrLevel !== null) {
+      if (actualPrLevel.startsWith('Level 0') && !captureLevel.startsWith('Level 0')) {
+        warn(
+          `Actual capture level on PR branch: ${actualPrLevel}\n` +
+          `  Configured level was: ${captureLevel}\n` +
+          '  Tests likely failed before the PHPUnit/Jest reporter ran.\n' +
+          '  Check the PR branch test output above for framework boot errors\n' +
+          '  (e.g. "Call to undefined method", "Class not found").',
+        );
+      }
+      captureLevel = actualPrLevel;
+    }
+
+    if (prRunCode !== 0) {
+      warn(`Tests returned exit code ${prRunCode} on the PR branch.`);
+      warn('Continuing with compare — findings are still valid.');
+    }
+
+    if (graphBuildPrOk) {
+      log('Enriching PR branch traces with static metadata...');
+      runTracegraph(['graph', 'enrich', '--all', '--quiet'], repoDir, extraEnv);
+      log('Deriving runtime edges from PR branch traces...');
+      runTracegraph(['graph', 'derive-edges', '--quiet'], repoDir, extraEnv);
+    }
+
+    // Phase 2: collect call edges from this (PR-branch) run.
+    const prCallEdges = collectCallEdgesFromLatestRun(repoDir);
+    if (prCallEdges.length > 0) {
+      log(`Phase 2: collected ${prCallEdges.length} call edges from PR-branch run.`);
+      accumulatedCallEdges.push(...prCallEdges);
+    }
+  }
+
+  // Phase 2: resolve and write accumulated runtime call edges.
+  // Must happen before pr-context.json so graph_metadata.json is up-to-date
+  // and compare.ts can use runtimeEdgeCount when building the quality finding.
+  if (accumulatedCallEdges.length > 0) {
+    log(`Phase 2: resolving ${accumulatedCallEdges.length} accumulated call edges...`);
+    writeRuntimeCallEdgesIfAny(repoDir, accumulatedCallEdges, log, warn);
+    // Refresh graphMeta now that runtimeEdgeCount has been patched in
+    graphMeta = readGraphMeta(repoDir) ?? graphMeta;
+  }
+
+  // ── G8: Write pr-context.json before compare so compare.ts can load it ────
+  {
+    const prChangedFiles = await fetchPRFiles(owner, repo, selectedPR.number, token);
+    // Warn if the file-listing API returned empty despite the PR metadata reporting changed files.
+    // This usually means a rate-limit or auth error was silently swallowed by fetchPRFiles.
+    if (prChangedFiles.length === 0 && (selectedPR.changed_files ?? 0) > 0) {
+      warn(
+        `PR #${selectedPR.number} reports ${selectedPR.changed_files} changed file(s) ` +
+        `but the GitHub files API returned none.\n` +
+        `  Changed-file relevance analysis will be unavailable in the report.\n` +
+        `  Possible causes: API rate limit, missing token scope, or a transient network error.`,
+      );
+    }
+    const prContextPath  = path.join(repoDir, '.tracegraph', 'pr-context.json');
+    try {
+      // Build the context object.  G13.4: include the detected language so
+      // compare.ts can use prContext.language rather than guessing from sessions.
+      // G14.2: include test run exit codes so the CI report can surface test failures.
+      const prContextPayload: Record<string, unknown> = {
+        prNumber:         selectedPR.number,
+        prTitle:          selectedPR.title,
+        prAuthor:         selectedPR.user.login,
+        additions:        selectedPR.additions,
+        deletions:        selectedPR.deletions,
+        changedFiles:     selectedPR.changed_files,
+        changedFilePaths: prChangedFiles,
+        language:         stack.language,
+      };
+      if (baselineRunCode !== 0) {
+        prContextPayload['baselineRunExitCode'] = baselineRunCode;
+      }
+      if (prRunCode !== 0) {
+        prContextPayload['testRunExitCode'] = prRunCode;
+      }
+      // G19: when the PR run produced Level 0 traces (boot failure), try to
+      // extract the first meaningful error from the captured run output.
+      // This surfaces the root cause (e.g. "Call to undefined method...") in the
+      // report rather than leaving reviewers to scroll through terminal output.
+      const prActualLevel = readActualCaptureLevel(repoDir);
+      if (prRunCode !== 0 && prActualLevel?.startsWith('Level 0') && prRunCaptured !== null) {
+        const bootErr = extractBootError(prRunCaptured);
+        if (bootErr) {
+          prContextPayload['bootError'] = bootErr;
+        }
+      }
+      fs.writeFileSync(
+        prContextPath,
+        JSON.stringify(prContextPayload, null, 2) + '\n',
+        'utf8',
+      );
+      log(`  PR context written (${prChangedFiles.length} changed file paths).`);
+    } catch {
+      /* non-fatal — compare will run without PR context */
+    }
   }
 
   // ── 13. Compare ────────────────────────────────────────────────────────────
@@ -1627,7 +2839,49 @@ export async function auditCommand(
   log('PHASE D — Comparing against baseline');
   log(`${'─'.repeat(60)}`);
 
-  runTracegraph(['compare'], repoDir, extraEnv);
+  if (!testingAvailable) {
+    log(`⚠  Runtime compare skipped (${testingSkipReason}) — no runtime baseline available.`);
+    log('  See Phase D1 below for static architecture comparison.');
+  } else {
+    runTracegraph(['compare'], repoDir, extraEnv);
+  }
+
+  // ── D1. Architecture compare (PR branch graph vs base branch baseline) ─────
+  if (archBaselineOk && graphBuildPrOk) {
+    log(`\n${'─'.repeat(60)}`);
+    log('PHASE D1 — Architecture compare (PR vs base branch)');
+    log(`${'─'.repeat(60)}`);
+
+    // Human-readable output: architecture compare writes text to stderr
+    runTracegraph(['architecture', 'compare'], repoDir, extraEnv);
+
+    // JSON capture: same command with --json; stdout captured, stderr still
+    // flows to terminal (there's no stderr when --json is active, so no duplication)
+    const archJsonResult = captureTracegraph(['architecture', 'compare', '--json'], repoDir, extraEnv);
+    if (archJsonResult.stdout.trim()) {
+      try {
+        const parsed = JSON.parse(archJsonResult.stdout) as {
+          baseline?: { nodeCount?: number };
+          current?:  { edgeCount?: number };
+          diff: {
+            totalChanges:           number;
+            hasCriticalChanges:     boolean;
+            newCrossCommunityEdges: unknown[];
+            newGodNodes:            unknown[];
+          };
+        };
+        archDiffResult = {
+          totalChanges:       parsed.diff.totalChanges,
+          hasCriticalChanges: parsed.diff.hasCriticalChanges,
+          newCrossEdges:      parsed.diff.newCrossCommunityEdges.length,
+          newGodNodes:        parsed.diff.newGodNodes.length,
+          currentEdgeCount:   parsed.current?.edgeCount ?? 0,
+          // G15.3: base-branch node count for base→PR banner comparison
+          baselineNodeCount:  parsed.baseline?.nodeCount ?? 0,
+        };
+      } catch { /* parse failure — summary will omit architecture counts */ }
+    }
+  }
 
   // ── 14. Generate report ────────────────────────────────────────────────────
   log(`\n${'─'.repeat(60)}`);
@@ -1635,7 +2889,9 @@ export async function auditCommand(
   log(`${'─'.repeat(60)}`);
 
   const reportFormat = opts.json ? 'json' : 'markdown';
-  runTracegraph(['report', '--format', reportFormat], repoDir, extraEnv);
+  if (testingAvailable) {
+    runTracegraph(['report', '--format', reportFormat], repoDir, extraEnv);
+  }
 
   // ── Cleanup invasive files ─────────────────────────────────────────────────
   // Remove untracked files we created during the audit so the workspace is clean.
@@ -1657,7 +2913,8 @@ export async function auditCommand(
         .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs)
     : [];
 
-  process.stdout.write(`\n${'═'.repeat(60)}\n`);
+  const W = 62;
+  process.stdout.write(`\n${'═'.repeat(W)}\n`);
   process.stdout.write(`TraceGraph Audit — ${owner}/${repo}  PR #${selectedPR.number}\n`);
   process.stdout.write(`"${selectedPR.title}"\n`);
   process.stdout.write(`Author: ${selectedPR.user.login}  |  `);
@@ -1666,7 +2923,122 @@ export async function auditCommand(
   } else {
     process.stdout.write('\n');
   }
-  process.stdout.write(`Capture level: ${captureLevel}\n`);
+  process.stdout.write(`${'─'.repeat(W)}\n`);
+  // G14.4: renamed "Capture level:" → "Capture depth:" to match the three-tier terminology
+  process.stdout.write(`Capture depth:    ${captureLevel}\n`);
+
+  // G14.3: Test run status line — surfaces non-zero exit codes prominently
+  if (testingAvailable) {
+    const baseOk = baselineRunCode === 0;
+    const prOk   = prRunCode === 0;
+    if (baseOk && prOk) {
+      process.stdout.write(`Test status:      ✅ Passed (base exit:0  PR exit:0)\n`);
+    } else if (!baseOk && !prOk) {
+      process.stdout.write(`Test status:      ⚠️  Both runs failed  (base exit:${baselineRunCode}  PR exit:${prRunCode})\n`);
+    } else if (!baseOk) {
+      process.stdout.write(`Test status:      ⚠️  Baseline run failed  (exit:${baselineRunCode}  PR exit:0)\n`);
+    } else {
+      process.stdout.write(`Test status:      ⚠️  PR run failed  (base exit:0  PR exit:${prRunCode})\n`);
+    }
+  }
+
+  // Static graph summary
+  if (graphifyAvailable) {
+    if (graphMeta) {
+      // Effective edge count = static edges + Phase 2 runtime edges (if any)
+      const runtimeEdges       = graphMeta.runtimeEdgeCount ?? 0;
+      const effectiveEdgeCount = graphMeta.edgeCount + runtimeEdges;
+      // Use ⚠️ when graph has nodes but no edges (A1 quality) — ✅ would be misleading
+      const graphIcon = effectiveEdgeCount === 0 && graphMeta.nodeCount > 0 ? '⚠️' : '✅';
+      // G15.3: show base→PR node count when the graph was rebuilt for the PR branch
+      const baseNodeCount = archDiffResult?.baselineNodeCount ?? 0;
+      const nodeLabel = (baseNodeCount > 0 && baseNodeCount !== graphMeta.nodeCount)
+        ? `${baseNodeCount.toLocaleString()} → ${graphMeta.nodeCount.toLocaleString()} nodes`
+        : `${graphMeta.nodeCount.toLocaleString()} nodes`;
+      // Show effective edge count; when Phase 2 contributed edges, annotate with "(+N runtime)"
+      const edgeLabel = runtimeEdges > 0
+        ? `${effectiveEdgeCount.toLocaleString()} edges  (+${runtimeEdges} runtime)`
+        : `${effectiveEdgeCount.toLocaleString()} edges`;
+      process.stdout.write(
+        `Static graph:     ${graphIcon} ` +
+        `${nodeLabel}  |  ` +
+        `${edgeLabel}  |  ` +
+        `${graphMeta.communityCount} communities  |  ` +
+        `${graphMeta.godNodeCount} god nodes\n`,
+      );
+      // G17.4: explicit edge-warning line when 0 edges, so CI logs are easy to grep
+      if (effectiveEdgeCount === 0 && graphMeta.nodeCount > 0) {
+        const hasKey = !!(process.env['ANTHROPIC_API_KEY'] || process.env['GEMINI_API_KEY']);
+        process.stdout.write(
+          hasKey
+            ? 'Graph edges:      ⚠️  0 — run `graphify . --verbose` to diagnose extraction\n'
+            : 'Graph edges:      ⚠️  0 — set ANTHROPIC_API_KEY or GEMINI_API_KEY for call-graph extraction\n',
+        );
+      }
+    } else if (graphBuildBaseOk) {
+      process.stdout.write('Static graph:     ✅ Built (metadata unavailable)\n');
+    } else {
+      process.stdout.write('Static graph:     ⚠️  Build failed (see output above)\n');
+    }
+
+    // Architecture diff summary
+    if (archDiffResult != null) {
+      // A1-quality graph (0 edges): "No drift" is meaningless — both baseline and
+      // current lack edges, so comparing them tells us nothing about architecture.
+      if (archDiffResult.currentEdgeCount === 0) {
+        process.stdout.write('Architecture:     ⚠️  A1 quality — no edges; comparison unavailable\n');
+      } else if (archDiffResult.totalChanges === 0) {
+        process.stdout.write('Architecture:     ✅ No drift — graph matches baseline\n');
+      } else {
+        // A2-limited (edges present, 0 communities): god-node detection has no community
+        // structure to anchor it, so all god-node "changes" are low-confidence.
+        // When the only changes are god nodes in an A2-limited graph, say so explicitly
+        // rather than showing a raw change count that implies high confidence.
+        const isA2Limited = graphMeta.communityCount === 0 && graphMeta.edgeCount > 0;
+        const onlyGodNodeChanges =
+          archDiffResult.newGodNodes > 0 &&
+          archDiffResult.newCrossEdges === 0 &&
+          !archDiffResult.hasCriticalChanges;
+        if (isA2Limited && onlyGodNodeChanges) {
+          process.stdout.write(
+            `Architecture:     ⚠️  A2-limited — low-confidence god-node changes ` +
+            `(+${archDiffResult.newGodNodes} god node${archDiffResult.newGodNodes !== 1 ? 's' : ''})\n`,
+          );
+        } else {
+          const critFlag = archDiffResult.hasCriticalChanges ? '  🔴 CRITICAL' : '';
+          process.stdout.write(
+            `Architecture:     ⚠️  ${archDiffResult.totalChanges} change${archDiffResult.totalChanges !== 1 ? 's' : ''}` +
+            (archDiffResult.newCrossEdges > 0
+              ? `  (${archDiffResult.newCrossEdges} new cross-community edge${archDiffResult.newCrossEdges !== 1 ? 's' : ''})`
+              : '') +
+            (archDiffResult.newGodNodes > 0
+              ? `  (+${archDiffResult.newGodNodes} god node${archDiffResult.newGodNodes !== 1 ? 's' : ''})`
+              : '') +
+            `${critFlag}\n`,
+          );
+        }
+      }
+    } else if (archBaselineOk && graphBuildPrOk) {
+      process.stdout.write('Architecture:     (compare output above)\n');
+    } else if (!graphBuildBaseOk) {
+      process.stdout.write('Architecture:     ○ Skipped (graph build failed)\n');
+    } else if (!archBaselineOk) {
+      process.stdout.write('Architecture:     ○ Skipped (baseline create failed)\n');
+    } else {
+      process.stdout.write('Architecture:     ○ Skipped (PR branch graph build failed)\n');
+    }
+  } else {
+    process.stdout.write('Static graph:     ○ Skipped  (install Graphify: uv tool install graphifyy)\n');
+  }
+
+  if (!testingAvailable) {
+    process.stdout.write(
+      `Runtime:          ○ Skipped  (${testingSkipReason})\n` +
+      '                  Install deps and re-run for runtime behaviour diff.\n',
+    );
+  }
+
+  process.stdout.write(`${'─'.repeat(W)}\n`);
   process.stdout.write(`Workspace: ${repoDir}\n`);
 
   if (reportFiles[0]) {
@@ -1693,7 +3065,7 @@ export async function auditCommand(
     process.stdout.write(`JSON: ${reportFiles[0]}\n`);
   }
 
-  process.stdout.write(`${'═'.repeat(60)}\n`);
+  process.stdout.write(`${'═'.repeat(W)}\n`);
 
   return EXIT_CODES.SUCCESS;
 }

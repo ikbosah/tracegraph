@@ -47,10 +47,24 @@ final class TraceGraphPhpUnitExtension implements Extension
         // PHPUnit runs tests sequentially in a single process, so no locking needed.
         $state = new Internal\PhpUnitTestState($testsDir);
 
+        // Write meta.json so the CLI knows this is a PHP/PHPUnit run when
+        // assembling TraceSession files.  Without this file, `run.ts` defaults
+        // to language:'javascript' and the wrong remediation hint appears in
+        // audit reports.
+        try {
+            file_put_contents(
+                $runDir . DIRECTORY_SEPARATOR . 'meta.json',
+                json_encode(['language' => 'php', 'framework' => 'phpunit'], JSON_UNESCAPED_SLASHES) . "\n",
+            );
+        } catch (\Throwable) {
+            // Best-effort
+        }
+
         $facade->registerSubscribers(
             new Internal\TestPreparedSubscriber($state),
             new Internal\TestPassedSubscriber($state),
             new Internal\TestFailedSubscriber($state),
+            new Internal\TestErroredSubscriber($state),
             new Internal\TestSkippedSubscriber($state),
             new Internal\TestFinishedSubscriber($state),
         );

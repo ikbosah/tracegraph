@@ -115,7 +115,10 @@ final class TraceServiceProvider extends ServiceProvider
     {
         try {
             $gateListener = new GateEventListener();
-            Gate::after(static function (mixed $user, string $ability, bool|null $result, mixed $arguments) use ($gateListener): void {
+            // Laravel 10+ Gate::after() may pass an Illuminate\Auth\Access\Response
+            // object as $result instead of a plain bool.  Use mixed so the closure
+            // does not throw a TypeError; GateEventListener::handle() normalises it.
+            Gate::after(static function (mixed $user, string $ability, mixed $result, mixed $arguments) use ($gateListener): void {
                 $gateListener->handle($user, $ability, $result, is_array($arguments) ? $arguments : [$arguments]);
             });
         } catch (\Throwable) {

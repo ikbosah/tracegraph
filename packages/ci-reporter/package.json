@@ -1,6 +1,6 @@
 {
   "name": "@tracegraph/ci-reporter",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Renders TraceGraph reports as markdown, JSON, or GitHub Step Summary",
   "main": "dist/index.js",
   "module": "dist/index.mjs",

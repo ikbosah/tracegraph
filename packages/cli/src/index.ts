@@ -12,6 +12,15 @@
 
 import { Command } from 'commander';
 import path from 'path';
+import fs from 'fs';
+
+// Read version from package.json at runtime so it always reflects the built package.
+const CLI_VERSION: string = (() => {
+  try {
+    const raw = fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8');
+    return (JSON.parse(raw) as { version: string }).version;
+  } catch { return '0.0.0'; }
+})();
 import { EXIT_CODES } from '@tracegraph/shared-types';
 import { runCommand }          from './commands/run';
 import { cleanCommand }        from './commands/clean';
@@ -59,7 +68,25 @@ import {
 import { pullBaselinesFromTeamServer } from './commands/team-server';
 import { testgenCommand }              from './commands/testgen';
 import { baselineSuggestUpdateCommand } from './commands/baseline-suggest';
+import { baselineSuggestCommand }      from './commands/baseline-suggest-plan';
 import { auditCommand }                from './commands/audit';
+import {
+  graphBuildCommand,
+  graphStatusCommand,
+  graphOpenCommand,
+  graphCommunitiesCommand,
+  graphDoctorCommand,
+  graphEnrichCommand,
+  graphDeriveEdgesCommand,
+  type GraphDoctorOptions,
+} from './commands/graph';
+import { scanCommand } from './commands/scan';
+import {
+  architectureBaselineCreateCommand,
+  architectureBaselineStatusCommand,
+  architectureCompareCommand,
+} from './commands/architecture';
+import { mcpStartCommand } from './commands/mcp';
 
 // ── Extract the wrapped command (everything after --) ─────────────────────
 const rawArgv     = process.argv.slice(2); // strip 'node' and script path
@@ -72,7 +99,7 @@ const program = new Command();
 program
   .name('tracegraph')
   .description('Capture how code actually behaves during tests, scenarios, and local development runs, then produces trace files, behavior graphs, baselines, diffs, findings, and reports that help code reviewers with with runtime evidence of code changes.')
-  .version('0.0.1');
+  .version(CLI_VERSION);
 
 // ── tracegraph run [options] -- <command> ─────────────────────────────────
 program
@@ -142,19 +169,23 @@ program
   .option('--latest',             'Compare only traces from the most recent run (reads .tracegraph/latest.json)')
   .option('--fail-on-critical',   'Exit 3 if any critical findings are open')
   .option('--verbose',            'Show remediation snippets for each finding')
+  .option('--baseline-lite',      'G5: Skip runtime baseline diff; run trace analysis and architecture findings only (useful before baselines exist)')
   .option('--upload <url>',       'Upload traces and report to Team Server after comparing')
   .option('--project-id <id>',    'Project ID on Team Server (default: cwd basename)')
   .option('--token <token>',      'Bearer token for Team Server (default: $TRACEGRAPH_TOKEN)')
   .action(async (options: {
     baseline?: string; candidate?: string; bundle?: string; out?: string;
     latest?: boolean; failOnCritical?: boolean; verbose?: boolean;
-    upload?: string; projectId?: string; token?: string;
+    baselineLite?: boolean; upload?: string; projectId?: string; token?: string;
   }) => {
     const code = compareCommand(options);
     if (options.upload) {
       // Upload after compare completes (non-blocking on result)
-      const { uploadToTeamServer: _upload, createTeamServerRun: _create } =
-        await import('./commands/team-server');
+      const {
+        uploadToTeamServer: _upload,
+        createTeamServerRun: _create,
+        uploadArchitectureSnapshot: _uploadArch,
+      } = await import('./commands/team-server');
       const tgDir    = path.join(process.cwd(), '.tracegraph');
       const tracesDir = path.join(tgDir, 'traces');
       let latestRunId = 'unknown';
@@ -186,6 +217,27 @@ program
             traceFiles,
             reportFile,
           );
+
+          // G9: also upload the architecture snapshot if one exists locally
+          const archBaselinePath = path.join(
+            tgDir, 'static-graph', 'architecture-baseline.json',
+          );
+          if (require('fs').existsSync(archBaselinePath)) {
+            try {
+              const archJson = JSON.parse(
+                require('fs').readFileSync(archBaselinePath, 'utf8'),
+              ) as unknown;
+              await _uploadArch(
+                { serverUrl: options.upload!, projectId: options.projectId, token: options.token },
+                serverRunId,
+                archJson,
+              );
+            } catch (archErr) {
+              process.stderr.write(
+                `[tracegraph] Architecture snapshot upload failed: ${String(archErr)}\n`,
+              );
+            }
+          }
         }
       } catch (err) {
         process.stderr.write(`[tracegraph] Upload failed: ${String(err)}\n`);
@@ -323,8 +375,8 @@ program
 program
   .command('init')
   .description('Initialise TraceGraph in the current project')
-  .action(() => {
-    initCommand();
+  .action(async () => {
+    await initCommand();
     process.exit(EXIT_CODES.SUCCESS);
   });
 
@@ -399,19 +451,21 @@ scenarioCmd
 program
   .command('coverage')
   .description('Map changed functions (git diff) to runtime trace coverage')
-  .option('--base <ref>',        'Git ref to diff from (default: HEAD~1)')
-  .option('--head <ref>',        'Git ref to diff to (default: HEAD)')
-  .option('--traces <dir>',      'Directory containing .trace.json files')
-  .option('--out <file>',        'Write coverage report JSON to this file')
-  .option('--json',              'Also print the full report JSON to stdout')
-  .option('--fail-uncovered',    'Exit 1 if any changed functions have no trace coverage')
+  .option('--base <ref>',              'Git ref to diff from (default: HEAD~1)')
+  .option('--head <ref>',              'Git ref to diff to (default: HEAD)')
+  .option('--traces <dir>',            'Directory containing .trace.json files')
+  .option('--out <file>',              'Write coverage report JSON to this file')
+  .option('--json',                    'Also print the full report JSON to stdout')
+  .option('--fail-uncovered',          'Exit 1 if any changed functions have no trace coverage')
+  .option('--fail-on-uncovered-god',   'G3: Exit 7 if any changed god nodes have no trace coverage')
   .action((options: {
-    base?:          string;
-    head?:          string;
-    traces?:        string;
-    out?:           string;
-    json?:          boolean;
-    failUncovered?: boolean;
+    base?:               string;
+    head?:               string;
+    traces?:             string;
+    out?:                string;
+    json?:               boolean;
+    failUncovered?:      boolean;
+    failOnUncoveredGod?: boolean;
   }) => {
     process.exit(coverageCommand(options));
   });
@@ -462,7 +516,12 @@ program
   .option('--dry-run',              'Show what would be adopted without writing changes')
   .option('--reason <reason>',      'Adoption reason recorded in BASELINE_ASSUMPTIONS.md')
   .option('--approved-by <name>',   'Name of the person authorising the adoption')
-  .action((options: { dryRun?: boolean; reason?: string; approvedBy?: string }) => {
+  .option('--with-static-graph',    'G1: Build Graphify static graph and append architecture section to BASELINE_ASSUMPTIONS.md')
+  .option('--skip-graph',           'G1: Skip static graph step even if staticGraph.enabled is configured')
+  .action((options: {
+    dryRun?: boolean; reason?: string; approvedBy?: string;
+    withStaticGraph?: boolean; skipGraph?: boolean;
+  }) => {
     process.exit(adoptCommand(options));
   });
 
@@ -571,6 +630,22 @@ baselineCmd
     process.exit(await baselineSuggestUpdateCommand(options));
   });
 
+// ── tracegraph baseline suggest ───────────────────────────────────────────────
+// (added to the existing baseline command group)
+baselineCmd
+  .command('suggest')
+  .description('G3B: Rank unbaselined flows by architecture risk — shows which baselines to create first')
+  .option('--top <n>',        'Limit output to top N candidates', parseInt)
+  .option('--json',           'Print machine-readable JSON to stdout')
+  .option('--format <fmt>',   'Output format: text | markdown (default: text)')
+  .action((options: { top?: number; json?: boolean; format?: string }) => {
+    process.exit(baselineSuggestCommand({
+      top:    options.top,
+      json:   options.json,
+      format: (options.format ?? 'text') as 'text' | 'markdown',
+    }));
+  });
+
 // ── tracegraph testgen ────────────────────────────────────────────────────────
 program
   .command('testgen')
@@ -587,6 +662,135 @@ program
     process.exit(await testgenCommand(traceFile, options));
   });
 
+// ── tracegraph scan ───────────────────────────────────────────────────────────
+program
+  .command('scan')
+  .description('Baseline-free architecture risk scan (requires static graph; no runtime baseline needed)')
+  .option('--base <ref>',        'Git ref to diff from (default: HEAD~1)')
+  .option('--head <ref>',        'Git ref to diff to (default: HEAD)')
+  .option('--traces <dir>',      'Directory of .trace.json files for coverage-gap detection')
+  .option('--fail-on-critical',  'Exit 3 if any critical architecture findings are present')
+  .option('--json',              'Print machine-readable JSON report to stdout')
+  .option('--format <fmt>',      'Output format: text | markdown (default: text)')
+  .action((options: {
+    base?:          string;
+    head?:          string;
+    traces?:        string;
+    failOnCritical?: boolean;
+    json?:          boolean;
+    format?:        string;
+  }) => {
+    process.exit(scanCommand({
+      base:          options.base,
+      head:          options.head,
+      traces:        options.traces,
+      failOnCritical: options.failOnCritical,
+      json:          options.json,
+      format:        (options.format ?? 'text') as 'text' | 'markdown',
+    }));
+  });
+
+// ── tracegraph graph ──────────────────────────────────────────────────────────
+const graphCmd = program.command('graph').description('Manage the static architecture graph (Graphify)');
+
+graphCmd
+  .command('build')
+  .description('Build the static code graph with Graphify and write to .tracegraph/static-graph/')
+  .option('--quiet', 'Suppress progress output')
+  .action((options: { quiet?: boolean }) => {
+    process.exit(graphBuildCommand({ quiet: options.quiet }));
+  });
+
+graphCmd
+  .command('update')
+  .description('Rebuild the static graph (alias for graph build)')
+  .option('--quiet', 'Suppress progress output')
+  .action((options: { quiet?: boolean }) => {
+    process.exit(graphBuildCommand({ quiet: options.quiet }));
+  });
+
+graphCmd
+  .command('status')
+  .description('Show static graph metadata, staleness, and counts')
+  .action(() => {
+    process.exit(graphStatusCommand());
+  });
+
+graphCmd
+  .command('open')
+  .description('Open the Graphify HTML viewer in a browser')
+  .action(() => {
+    process.exit(graphOpenCommand());
+  });
+
+graphCmd
+  .command('communities')
+  .description('List all communities detected by Graphify (highlights sensitive and god-node communities)')
+  .action(() => {
+    process.exit(graphCommunitiesCommand());
+  });
+
+graphCmd
+  .command('doctor')
+  .description('Check Python, Graphify installation, and graph freshness')
+  .option('--install', 'Install missing dependencies (Graphify via pip/pipx)')
+  .action((options: GraphDoctorOptions) => {
+    process.exit(graphDoctorCommand(process.cwd(), options));
+  });
+
+graphCmd
+  .command('enrich')
+  .description('G2: Attach static architecture metadata to runtime trace events')
+  .option('--trace <file>', 'Enrich a specific trace file')
+  .option('--all',          'Re-enrich all traces in .tracegraph/traces/')
+  .option('--quiet',        'Suppress progress output')
+  .action((options: { trace?: string; all?: boolean; quiet?: boolean }) => {
+    process.exit(graphEnrichCommand(options));
+  });
+
+graphCmd
+  .command('derive-edges')
+  .description('Build runtime call-graph edges from enriched traces; recomputes god nodes')
+  .option('--min-confidence <n>', 'Minimum match confidence to include (default: 0)', parseFloat)
+  .option('--quiet',              'Suppress progress output')
+  .action((options: { minConfidence?: number; quiet?: boolean }) => {
+    process.exit(graphDeriveEdgesCommand(options));
+  });
+
+// ── tracegraph architecture ───────────────────────────────────────────────────
+const architectureCmd = program
+  .command('architecture')
+  .description('Manage the static architecture baseline (G3D)');
+
+const archBaselineCmd = architectureCmd
+  .command('baseline')
+  .description('Manage the architecture baseline snapshot');
+
+archBaselineCmd
+  .command('create')
+  .description('Snapshot the current static graph as the architecture baseline')
+  .option('--created-by <name>', 'Override the author recorded in the baseline')
+  .option('--quiet',             'Suppress output')
+  .action((options: { createdBy?: string; quiet?: boolean }) => {
+    process.exit(architectureBaselineCreateCommand(options));
+  });
+
+archBaselineCmd
+  .command('status')
+  .description('Show the stored architecture baseline metadata and top-level counts')
+  .action(() => {
+    process.exit(architectureBaselineStatusCommand());
+  });
+
+architectureCmd
+  .command('compare')
+  .description('Diff the current static graph against the architecture baseline')
+  .option('--fail-on-critical', 'Exit 3 if critical architecture changes detected (new edges into sensitive communities)')
+  .option('--json',             'Print machine-readable JSON diff to stdout')
+  .action((options: { failOnCritical?: boolean; json?: boolean }) => {
+    process.exit(architectureCompareCommand(options));
+  });
+
 // ── tracegraph audit ─────────────────────────────────────────────────────────
 program
   .command('audit')
@@ -601,6 +805,7 @@ program
   .option('--json',               'Print machine-readable JSON summary')
   .option('--timeout <seconds>',  'Per-phase timeout in seconds (default: 300)',
           (v) => parseInt(v, 10))
+  .option('--skip-graph',         'Skip Graphify static graph analysis even if Graphify is installed')
   .action(async (githubUrl: string, options: {
     pr?:        number;
     workspace?: string;
@@ -609,6 +814,7 @@ program
     out?:       string;
     json?:      boolean;
     timeout?:   number;
+    skipGraph?: boolean;
   }) => {
     process.exit(await auditCommand(githubUrl, options));
   });
@@ -634,6 +840,29 @@ storageCmd
   .action(() => {
     storageStatusCommand();
     process.exit(EXIT_CODES.SUCCESS);
+  });
+
+// ── tracegraph mcp ────────────────────────────────────────────────────────────
+const mcpCmd = program.command('mcp').description('Model Context Protocol (MCP) server integration (G10)');
+
+mcpCmd
+  .command('start')
+  .description(
+    'Start a local MCP server (stdin/stdout) exposing the static graph, ' +
+    'runtime traces, and findings as queryable tools for AI coding assistants.',
+  )
+  .option('--project-dir <dir>', 'Project directory to load graph/traces from (default: cwd)')
+  .option('--no-graph',          'Disable static graph tools')
+  .option('--no-traces',         'Disable trace and coverage tools')
+  .option('--no-findings',       'Disable findings explanation tools')
+  .action((options: { projectDir?: string; graph?: boolean; traces?: boolean; findings?: boolean }) => {
+    mcpStartCommand({
+      projectDir: options.projectDir,
+      graph:      options.graph,
+      traces:     options.traces,
+      findings:   options.findings,
+    });
+    // mcpStartCommand blocks — does not return until stdin is closed
   });
 
 // ── Parse (using tgArgv — TraceGraph flags only, no wrapped command args) ──

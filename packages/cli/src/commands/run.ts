@@ -62,11 +62,27 @@ function detectAndInjectReporter(
   }
 
   if (!runner) {
-    // Could not detect a known test runner — advise the user
-    messages.push(
-      'TraceGraph: no test reporter detected — capture level will be 0–1',
-      'Recommendation: add @tracegraph/vitest or @tracegraph/jest for test-level tracing',
-    );
+    // Could not detect a known test runner.
+    // For PHP commands (artisan, phpunit, pest), the TraceGraph PHPUnit extension
+    // provides per-test tracing — not vitest/jest.  Show a language-specific hint.
+    const joinedLower = args.join(' ').toLowerCase();
+    const isPhpCommand =
+      /\bartisan\b/.test(joinedLower) ||
+      /\bphpunit\b/.test(joinedLower) ||
+      /\bpest\b/.test(joinedLower) ||
+      joinedLower.trimStart().startsWith('php ');
+
+    if (isPhpCommand) {
+      messages.push(
+        'TraceGraph: PHP command detected — per-test tracing is provided by the PHPUnit extension.',
+        'If the application failed before PHPUnit ran, no test events will be captured.',
+      );
+    } else {
+      messages.push(
+        'TraceGraph: no test reporter detected — capture level will be 0–1',
+        'Recommendation: add @tracegraph/vitest or @tracegraph/jest for test-level tracing',
+      );
+    }
     return { args, messages, injected: false, runner: null };
   }
 
@@ -78,12 +94,14 @@ function detectAndInjectReporter(
     return { args, messages, injected: false, runner };
   }
 
-  // Check whether a TraceGraph reporter is already wired in (config or explicit flag)
+  // Check whether a TraceGraph reporter is already wired in (config or explicit flag).
+  //
+  // Pattern 1: --reporter=@tracegraph/vitest (package name form, direct install)
   const alreadyPresent = args.some((a) =>
     /--reporters?=@tracegraph\//i.test(a),
   );
 
-  // Also check: if any arg is exactly "--reporter" or "--reporters" followed by @tracegraph/
+  // Pattern 2: --reporter @tracegraph/vitest (two-arg form)
   let alreadyPresentByPair = false;
   for (let i = 0; i < args.length - 1; i++) {
     if ((args[i] === '--reporter' || args[i] === '--reporters') &&
@@ -93,14 +111,32 @@ function detectAndInjectReporter(
     }
   }
 
+  // Pattern 3: --reporter=/abs/path/reporter.mjs (absolute-path form injected by
+  // `tracegraph audit` for use in foreign repos that don't have @tracegraph packages
+  // installed). An absolute path starting with /, file://, or a Windows drive letter
+  // indicates an already-injected standalone reporter — skip re-injection.
+  // This is the key guard for the audit workflow: the audit injects reporter.mjs with
+  // its absolute path; the `tracegraph run` subprocess must not layer a second injection
+  // on top that uses the @tracegraph/vitest package name (not installed in the target repo).
+  const alreadyPresentByAbsPath = args.some((a) => {
+    const m = a.match(/^--reporters?=(.+)$/i);
+    if (!m) return false;
+    const val = m[1] ?? '';
+    return (
+      val.startsWith('/') ||           // Unix absolute path
+      val.startsWith('file://') ||     // file URL
+      /^[A-Za-z]:[\\/]/.test(val)      // Windows drive letter (C:\...)
+    );
+  });
+
   // Also check the vitest config file if one exists (best-effort, not required)
   // Including any explicitly-passed --config path in the args
   const explicitConfig = extractConfigArg(args);
   const hasReporterInConfig = checkVitestConfigForTraceGraphReporter(workspaceRoot, explicitConfig);
 
-  if (alreadyPresent || alreadyPresentByPair || hasReporterInConfig) {
+  if (alreadyPresent || alreadyPresentByPair || alreadyPresentByAbsPath || hasReporterInConfig) {
     messages.push(
-      `TraceGraph: detected ${runner} — @tracegraph/${runner} reporter already present, skipping injection`,
+      `TraceGraph: detected ${runner} — reporter already present, skipping injection`,
     );
     return { args, messages, injected: false, runner };
   }
@@ -376,6 +412,31 @@ export async function runCommand(
     }
   }
 
+  // Fallback: if meta.json was absent or didn't specify a language, scan the
+  // first available per-test event file for a language field.  This covers
+  // adapters that write language on individual events but don't write meta.json
+  // (e.g. older PHPUnit extension builds before the meta.json fix).
+  if (traceLanguage === 'javascript') {
+    const testsRunDirFallback = path.join(runDir, 'tests');
+    try {
+      if (fs.existsSync(testsRunDirFallback)) {
+        const firstTestFile = fs.readdirSync(testsRunDirFallback)
+          .find((f) => f.endsWith('.events.jsonl.tmp'));
+        if (firstTestFile) {
+          const firstLine = fs.readFileSync(
+            path.join(testsRunDirFallback, firstTestFile), 'utf8',
+          ).split('\n')[0];
+          if (firstLine) {
+            const evt = JSON.parse(firstLine) as { language?: string };
+            if (evt.language === 'php') traceLanguage = 'php';
+          }
+        }
+      }
+    } catch {
+      // Non-fatal: leave traceLanguage as 'javascript'
+    }
+  }
+
   // ── Finalise per-test-case traces (written by Vitest reporter) ───────────
   // The reporter writes one {testTraceId}.events.jsonl.tmp per test case
   // into {runDir}/tests/. Finalize each one before the main run trace.
@@ -481,6 +542,33 @@ export async function runCommand(
     } catch {
       // Non-fatal
     }
+  }
+
+  // ── G2: Auto-enrich traces with static graph metadata ────────────────────
+  // Runs silently after traces are written; non-fatal on any error.
+  // Only runs when staticGraph.enabled and enrichTraces !== false.
+  try {
+    const sgCfg = config.staticGraph;
+    if (sgCfg?.enabled && sgCfg.enrichTraces !== false) {
+      const { loadOrRebuildGraphIndex, enrichTraceFiles: _enrichFiles } =
+        require('@tracegraph/static-graph') as typeof import('@tracegraph/static-graph');
+      const index = loadOrRebuildGraphIndex(workspaceRoot);
+      if (index) {
+        const enrichPaths = [
+          path.join(tracesDir, `${traceId}.trace.json`),
+          ...testTracePaths,
+        ].filter((p) => fs.existsSync(p));
+        const resolverCfg = { minMatchConfidence: sgCfg.minMatchConfidence ?? 0.75 };
+        const enrichResult = _enrichFiles(enrichPaths, index, resolverCfg);
+        if (enrichResult.eventMatches > 0) {
+          process.stderr.write(
+            `[tracegraph] Static enrichment: ${enrichResult.eventMatches} event(s) matched across ${enrichResult.enriched} trace(s)\n`,
+          );
+        }
+      }
+    }
+  } catch {
+    // Non-fatal — enrichment failure must never break the run
   }
 
   // ── Emit trace.completed (the VS Code notification signal) ───────────────

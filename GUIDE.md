@@ -1,6 +1,6 @@
 # TraceGraph — Complete User Guide
 
-> **Version:** 0.2.0 · **Packages:** `@tracegraph/cli` and all adapters
+> **Version:** 0.3.0 · **Packages:** `@tracegraph/cli` and all adapters
 
 ---
 
@@ -36,28 +36,40 @@
    - [tracegraph scenario](#712-tracegraph-scenario)
    - [tracegraph import xdebug](#713-tracegraph-import-xdebug)
    - [tracegraph coverage](#714-tracegraph-coverage)
-   - [tracegraph pack](#715-tracegraph-pack)
-   - [tracegraph schema](#716-tracegraph-schema)
-   - [tracegraph clean & storage](#717-tracegraph-clean--storage-status)
+   - [tracegraph pack, testgen & baseline suggest](#715-tracegraph-pack--testgen)
+   - [tracegraph scan](#716-tracegraph-scan)
+   - [tracegraph graph](#717-tracegraph-graph)
+   - [tracegraph architecture](#718-tracegraph-architecture)
+   - [tracegraph mcp](#719-tracegraph-mcp)
+   - [tracegraph schema](#720-tracegraph-schema)
+   - [tracegraph clean & storage](#721-tracegraph-clean--storage-status)
+   - [tracegraph audit](#722-tracegraph-audit)
+   - [tracegraph replay](#723-tracegraph-replay)
+   - [tracegraph server start](#724-tracegraph-server-start)
+   - [tracegraph upload](#725-tracegraph-upload)
+   - [tracegraph pull](#726-tracegraph-pull)
 8. [Baseline, Compare & Findings Workflow](#8-baseline-compare--findings-workflow)
 9. [Security & Reliability Findings](#9-security--reliability-findings)
 10. [Scenario Runner](#10-scenario-runner)
 11. [AI Change Coverage & Prompt Packs](#11-ai-change-coverage--prompt-packs)
-12. [VS Code Extension](#12-vs-code-extension)
-13. [CI Integration](#13-ci-integration)
-14. [Sample Projects](#14-sample-projects)
-15. [File System Layout](#15-file-system-layout)
-16. [Configuration Reference](#16-configuration-reference)
-17. [Exit Codes](#17-exit-codes)
-18. [Troubleshooting](#18-troubleshooting)
+12. [Static Architecture Analysis](#12-static-architecture-analysis)
+13. [MCP Server](#13-mcp-server)
+14. [VS Code Extension](#14-vs-code-extension)
+15. [CI Integration](#15-ci-integration)
+16. [Sample Projects](#16-sample-projects)
+17. [File System Layout](#17-file-system-layout)
+18. [Configuration Reference](#18-configuration-reference)
+19. [Exit Codes](#19-exit-codes)
+20. [Troubleshooting](#20-troubleshooting)
 
 ---
 
 ## 1. What is TraceGraph?
 
 TraceGraph is a **CLI-first runtime assurance platform**. It wraps your existing test and
-application commands, captures a complete structured execution trace of every HTTP request,
-database query, authorisation check, function call, and test result — then gives you:
+application commands, captures structured runtime evidence from supported adapters — including
+HTTP requests, database queries, authorisation checks, function calls, and test results
+depending on capture level — then gives you:
 
 - A **visual call graph** of everything your application did at runtime
 - A **behaviour diff engine** that compares traces across code changes and flags meaningful regressions
@@ -73,7 +85,7 @@ database query, authorisation check, function call, and test result — then giv
 | It is NOT | Because |
 |-----------|---------|
 | A debugger | No breakpoints, no stepping; it observes what already runs |
-| A static analyser | Every finding is derived from actual runtime behaviour |
+| A traditional static analyser | Runtime evidence is the source of truth; static graph intelligence enriches findings but does not replace runtime observation |
 | An APM / observability platform | No production metrics, no aggregation, no agents in prod |
 | A test framework replacement | It wraps existing test runners; your tests stay unchanged |
 
@@ -596,14 +608,15 @@ code transformation tooling.
 ```typescript
 import { traceFunction, traceMethod } from '@tracegraph/trace-js';
 
-// ── Function wrapper ──────────────────────────────────────────────
-// Before:
-async function createInvoice(data: CreateInvoiceDto) { ... }
-
-// After:
+// ── Function wrapper — two equivalent signatures ──────────────────
+// Signature 1: name-first (recommended for new code)
 const createInvoice = traceFunction('InvoiceService.create', async function(data) {
   return { id: 'inv_001', ...data };
 });
+
+// Signature 2: function-first with options object (useful when wrapping existing refs)
+const createInvoice = traceFunction(createInvoiceImpl, { name: 'InvoiceService.create' });
+
 // Emits: function_call { name: 'InvoiceService.create', input: data, output: result }
 
 
@@ -1897,7 +1910,7 @@ Output: ChangeCoverageReport
 
 ---
 
-### 7.15 `tracegraph pack`
+### 7.15 `tracegraph pack` & `testgen`
 
 Generates AI context packs from a `TraceReport` and recent traces, writing them to the
 conventional locations where AI tools automatically pick them up.
@@ -1956,9 +1969,319 @@ Each pack contains:
   ✓ wrote  .tracegraph/mcp-context.json                (15.1 KB)
 ```
 
+#### `tracegraph testgen`
+
+Generates test stubs for changed functions that have no runtime trace coverage:
+
+```
+tracegraph testgen [--framework <fw>] [--base <ref>] [--out <dir>] [--dry-run]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--framework` | auto-detect | `vitest` / `jest` / `phpunit` / `pytest` |
+| `--base <ref>` | `HEAD~1` | Git ref for the diff base |
+| `--out <dir>` | `tests/generated/` | Where to write generated test files |
+| `--dry-run` | — | Print stubs to stdout without writing files |
+
+```bash
+# Generate Vitest stubs for uncovered changed functions
+tracegraph testgen --framework vitest
+
+# Preview what would be generated
+tracegraph testgen --framework jest --dry-run
+```
+
+Each stub includes the function signature, a TODO for the test body, and a comment showing the
+TraceGraph finding that triggered the gap.
+
+#### `tracegraph baseline suggest`
+
+Suggests which baselines to create next, scored by blast radius, community coverage, and current
+assurance level:
+
+```bash
+tracegraph baseline suggest [--top N] [--json] [--format markdown]
+```
+
+```
+tracegraph baseline suggest --top 5
+
+Top 5 baseline recommendations:
+  1. POST /checkout       score: 0.92  (god-node caller, sensitive community, 0 baselines)
+  2. PUT /users/:id/role  score: 0.88  (auth endpoint, high blast radius)
+  3. GET /orders          score: 0.71  (N+1 risk, frequently traced)
+  4. DELETE /products/:id score: 0.65  (write + external call, no baseline)
+  5. POST /invoices       score: 0.58  (existing baseline — refresh recommended)
+```
+
+#### `tracegraph baseline suggest-update`
+
+Reviews **existing** baselines that have drifted from recent traces and classifies each as
+safe to auto-approve or requiring human review:
+
+```bash
+tracegraph baseline suggest-update [--auto-approve] [--json] [--format markdown]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--auto-approve` | — | Automatically approve baselines rated SAFE; skip those needing review |
+| `--json` | — | Output as JSON |
+| `--format markdown` | — | Output as Markdown |
+
+**Difference from `baseline suggest`:**
+
+| Command | Purpose |
+|---------|---------|
+| `baseline suggest` | Routes/functions with **no baseline yet** — scored by blast radius |
+| `baseline suggest-update` | **Existing baselines** that have drifted — classified by review risk |
+
+```
+tracegraph baseline suggest-update
+
+Baseline review (3 drifted):
+  ✅ SAFE     GET /invoices     — minor structural change, no security events affected
+  ✅ SAFE     GET /products     — response count change only
+  ⚠️  REVIEW   POST /checkout   — auth middleware call removed from trace; human review required
+```
+
+Run `--auto-approve` to accept all SAFE-rated baselines in one step:
+
+```bash
+tracegraph baseline suggest-update --auto-approve
+# → Approved 2  (skipped 1 requiring human review)
+```
+
 ---
 
-### 7.16 `tracegraph schema`
+### 7.16 `tracegraph scan`
+
+Runs a **baseline-free risk scan** using the static call graph. Unlike `tracegraph compare`,
+this does not require a runtime baseline — it identifies architectural risks directly from the
+graph structure and any existing trace coverage.
+
+```
+tracegraph scan [--json] [--format markdown] [--min-assurance <n>]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--json` | — | Output full findings as JSON |
+| `--format markdown` | — | Output as Markdown |
+| `--min-assurance <n>` | — | Exit 8 if current assurance level is below `n` (0–5) |
+
+```bash
+tracegraph scan
+```
+
+**What it detects:**
+
+| Finding | Description | Severity |
+|---------|-------------|----------|
+| `architecture.god_node_untested` | Node with many dependents and no trace coverage | High |
+| `architecture.high_blast_radius` | Node that would affect many other nodes if changed, no coverage | High |
+| `architecture.sensitive_community_unverified` | Auth/payment community with no verified trace | High |
+| `architecture.static_edge_added` | New call edge between communities in current graph vs baseline | Medium |
+| `architecture.community_drift` | New communities detected vs architecture baseline | Medium |
+
+**Example output:**
+
+```
+Static Risk Scan — 2026-06-10
+───────────────────────────────────────────────────────────
+Graph:   312 nodes | 0 edges | 4 communities | 2 god nodes
+Traces:  18 runtime traces covering 67 nodes (21%)
+
+Findings (5):
+  🔴 HIGH  architecture.sensitive_community_unverified
+           Community "auth" (14 nodes) has no verified runtime trace
+  🔴 HIGH  architecture.god_node_untested
+           UserService.create — 47 dependents, 0 traces
+  🟡 MEDIUM architecture.static_edge_added
+           New edge: OrderService → PaymentService (not in architecture baseline)
+
+Assurance: Level 1 — Static only (no runtime baseline)
+Next step: tracegraph baseline suggest
+```
+
+---
+
+### 7.17 `tracegraph graph`
+
+Manages the static call graph built from your source tree.
+
+```
+tracegraph graph <subcommand> [options]
+```
+
+#### `graph build`
+
+Builds the static call graph from source.
+
+```bash
+tracegraph graph build [--dir <path>] [--skip-if-fresh]
+```
+
+```
+tracegraph graph build
+  → detecting language...
+  → building call graph (312 nodes, 0 edges)
+  → computing communities (4 detected)
+  → scoring god nodes (2 detected)
+  → wrote .tracegraph/static-graph/graph_index.json
+  ✅ Graph built successfully
+```
+
+#### `graph status`
+
+Shows current graph statistics.
+
+```bash
+tracegraph graph status [--json]
+```
+
+```
+Static Graph Status
+─────────────────────────────────────────
+Nodes:       312
+Edges:       0
+Communities: 4
+God nodes:   2  (> 95th percentile in-degree)
+Built:       2026-06-10T14:30:00Z
+```
+
+#### `graph communities`
+
+Lists detected communities and cross-community edges.
+
+```bash
+tracegraph graph communities [--json]
+```
+
+#### `graph open`
+
+Opens the static graph in the HTML viewer.
+
+```bash
+tracegraph graph open
+```
+
+#### `graph doctor`
+
+Diagnoses graph build quality and suggests improvements.
+
+```bash
+tracegraph graph doctor
+```
+
+---
+
+### 7.18 `tracegraph architecture`
+
+Manages architecture baselines — snapshots of the graph used to detect structural drift.
+
+#### `architecture baseline create`
+
+Snapshots the current graph as the architecture baseline.
+
+```bash
+tracegraph architecture baseline create [--created-by <name>]
+```
+
+```
+tracegraph architecture baseline create
+  → reading static graph (312 nodes, 0 edges)
+  → extracting cross-community edges (7)
+  → identifying god nodes (2)
+  → wrote .tracegraph/static-graph/architecture-baseline.json
+  ✅ Architecture baseline created
+```
+
+#### `architecture baseline status`
+
+Shows what is stored in the architecture baseline.
+
+```bash
+tracegraph architecture baseline status
+```
+
+#### `architecture compare`
+
+Diffs the current graph against the stored architecture baseline.
+
+```bash
+tracegraph architecture compare [--fail-on-critical] [--json]
+```
+
+```
+Architecture Compare
+─────────────────────────────────────────────────────
+Baseline:  2026-06-08  312 nodes  7 cross-community edges
+Current:   2026-06-10  316 nodes  9 cross-community edges
+
+Changes:
+  + 4 new nodes
+  + 2 new cross-community edges:
+      OrderService → PaymentService    (NEW — sensitive community target)
+      ReportService → UserService      (NEW)
+
+⚠️  1 critical change: new edge into sensitive community (auth/payment)
+```
+
+Exits 3 when `--fail-on-critical` is set and a new edge targets a sensitive community.
+
+---
+
+### 7.19 `tracegraph mcp`
+
+Starts an MCP (Model Context Protocol) server that exposes static graph and runtime trace
+data as callable tools for AI tools (Claude, Cursor, etc.).
+
+```
+tracegraph mcp start [--project-dir <path>] [--no-graph] [--no-traces] [--no-findings]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--project-dir <path>` | Current directory | Project root to load graph/traces from |
+| `--no-graph` | — | Disable the 5 graph tools |
+| `--no-traces` | — | Disable the trace event tool |
+| `--no-findings` | — | Disable the findings explain tool |
+
+The server communicates via **JSON-RPC 2.0 over stdin/stdout** using the MCP protocol
+(`2024-11-05`). Register it in your AI tool's MCP configuration:
+
+```json
+{
+  "mcpServers": {
+    "tracegraph": {
+      "command": "tracegraph",
+      "args": ["mcp", "start"],
+      "cwd": "/path/to/your/project"
+    }
+  }
+}
+```
+
+**Available MCP tools:**
+
+| Tool | Description |
+|------|-------------|
+| `tracegraph.graph.get_node` | Fetch a static graph node by symbol name |
+| `tracegraph.graph.get_neighbors` | Get direct callers and callees of a node |
+| `tracegraph.graph.get_community` | Get all nodes in a community |
+| `tracegraph.graph.get_god_nodes` | List god nodes by degree |
+| `tracegraph.graph.find_path` | Shortest call path between two nodes |
+| `tracegraph.trace.find_events_for_node` | Runtime events matching a symbol name |
+| `tracegraph.coverage.get_uncovered_changed_nodes` | Changed functions with no trace coverage |
+| `tracegraph.findings.explain_with_architecture` | Explain a finding enriched with graph context |
+
+All tools return `{ error: "..." }` rather than crashing when data is unavailable.
+
+---
+
+### 7.20 `tracegraph schema`
 
 Inspects and migrates TraceGraph artifact schemas to keep old traces and baselines compatible
 across CLI upgrades.
@@ -2006,7 +2329,7 @@ tracegraph baseline migrate
 
 ---
 
-### 7.17 `tracegraph clean` & `storage status`
+### 7.21 `tracegraph clean` & `storage status`
 
 #### `clean`
 
@@ -2035,6 +2358,219 @@ TraceGraph Storage
   Baselines:   4    (in .tracegraph/baselines/)
   Total size:  1.4 MB
   Location:    /home/alice/invoice-api/.tracegraph
+```
+
+---
+
+### 7.22 `tracegraph audit`
+
+Clones a GitHub repository, scores open pull requests for behavioral risk, runs the test suite
+on both the base branch and the PR branch, compares runtime behavior, and generates a findings
+report — without modifying any tracked files in the target repository.
+
+```
+tracegraph audit <github-url> [options]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--pr <n>` | Highest-risk open PR | Audit a specific PR number instead of auto-selecting |
+| `--skip-fork` | — | Skip PRs that originate from forks |
+| `--json` | — | Output findings as JSON |
+
+**Audit workflow:**
+
+1. Fetches open PRs and scores them by keyword, activity, size, and labels
+2. Clones the repo to `~/.tracegraph/audits/`
+3. Detects the stack (Node.js, PHP, Python, Java, Go, .NET)
+4. Installs dependencies non-interactively
+5. Injects TraceGraph instrumentation (non-invasively for most stacks)
+6. Runs tests on the base branch → captures baseline
+7. Checks out the PR branch → runs tests again
+8. Compares and generates a full behavioral diff report
+
+```bash
+# Audit the highest-risk open PR (auto-selected)
+tracegraph audit https://github.com/expressjs/express --skip-fork
+
+# Audit a specific PR
+tracegraph audit https://github.com/laravel/framework --pr 54321
+```
+
+**Example output:**
+
+```
+TraceGraph Audit — github.com/expressjs/express PR #5432
+────────────────────────────────────────────────────────────
+Stack:    Node.js / Express / Vitest
+Base:     v4.18.2 (main)
+PR:       #5432 — "fix: response header encoding"
+
+Baseline run:  ✓  47 tests passed  → 47 traces captured
+PR run:        ✓  47 tests passed  → 47 traces captured
+
+Behavioral diff (2 findings):
+  🟡 MEDIUM  response.header.removed — x-powered-by removed from 3 routes
+  🟢 LOW     function_added — res._sanitizeHeader added (new internal helper)
+
+Report: ~/.tracegraph/audits/expressjs__express__pr5432/report.html
+```
+
+**Instrumentation injection detail:**
+
+- **PHPUnit (10/11):** patches `phpunit.xml` and writes a bootstrap chainer; re-injected after
+  PR checkout to survive `git checkout -- .`
+- **Vitest:** writes untracked `vitest.config.tracegraph.ts` using `mergeConfig()` — no
+  tracked files are modified; the file is deleted after the audit
+- **Node.js (CJS/ESM):** uses `--require` / `--import` hooks; no file modification
+
+**Report output:** `~/.tracegraph/audits/<owner>__<repo>__pr<n>/`
+
+**Exit codes:** exits `3` if critical findings are present, `0` if none.
+
+---
+
+### 7.23 `tracegraph replay`
+
+Re-executes the HTTP requests recorded in a trace file against a live server. Useful for
+verifying that a fix changed runtime behavior, or for replaying production traffic in a
+staging environment.
+
+```
+tracegraph replay <trace-file> [options]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--server <url>` | `baseUrl` from trace | Target server URL |
+| `--rate <n>` | `1` | Requests per second |
+| `--skip-sensitive-headers` | `true` | Strip `authorization`, `cookie`, `x-api-key` from replayed requests |
+| `--no-trace` | — | Replay without capturing a new trace |
+| `--dry-run` | — | Print requests that would be sent without sending them |
+| `--allow-production` | — | Override the production-URL safety guard |
+
+**Safety guards (active by default):**
+
+- Production URLs (matching `*.prod.*`, `production.*`, `*-prod.*`) are blocked; pass
+  `--allow-production` to override
+- Sensitive request headers are stripped to avoid replaying credentials into a different environment
+- Rate is capped at 1 req/s to prevent accidental load
+
+```bash
+# Preview requests before sending
+tracegraph replay .tracegraph/traces/trace_abc123.trace.json --dry-run
+
+# Replay against a local dev server, capture new trace for comparison
+tracegraph replay .tracegraph/traces/trace_abc123.trace.json \
+  --server http://localhost:3000
+
+# After replay, diff the new trace against the original baseline
+tracegraph compare
+```
+
+---
+
+### 7.24 `tracegraph server start`
+
+Starts the TraceGraph Team Server locally. The Team Server provides shared baselines,
+findings, suppression rules, and the architecture dashboard for the whole team.
+
+```
+tracegraph server start [options]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--port <n>` | `4321` | Port to listen on |
+| `--db <path>` | `~/.tracegraph/server.db` | SQLite database path |
+| `--token <token>` | — | API token for client authentication |
+| `--project-id <id>` | — | Default project ID for single-project setups |
+
+The recommended team deployment uses the provided Docker Compose file:
+
+```bash
+# Docker Compose (recommended for persistent team use)
+docker compose up -d
+
+# Local for evaluation
+tracegraph server start --port 4321 --token my-secret-token
+```
+
+The architecture dashboard at `http://localhost:4321/architecture` shows graph snapshot
+history, architecture debt score `(godNodeRatio × 60 + crossEdgeDensity × 40) × 100`, and
+community drift over time.
+
+**First-time setup:**
+
+```bash
+# 1. Start the server
+tracegraph server start --token my-secret-token
+
+# 2. Upload current project artifacts
+tracegraph upload --server http://localhost:4321 --token my-secret-token
+
+# 3. Pull shared baselines into the local project
+tracegraph pull --server http://localhost:4321 --token my-secret-token
+```
+
+---
+
+### 7.25 `tracegraph upload`
+
+Uploads trace artifacts, findings reports, and the current architecture snapshot to a Team Server.
+
+```
+tracegraph upload [options]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--server <url>` | `TRACEGRAPH_SERVER_URL` env | Team Server base URL |
+| `--token <token>` | `TRACEGRAPH_TOKEN` env | API authentication token |
+| `--project-id <id>` | From `tracegraph.config.json` | Project identifier on the server |
+| `--run-id <id>` | Latest run | Specific run directory to upload |
+| `--include-architecture` | `true` | Upload the current architecture snapshot |
+| `--dry-run` | — | Print what would be uploaded without uploading |
+
+```bash
+# Upload after a CI run
+tracegraph upload --server https://your-team-server.internal
+
+# Upload traces + architecture snapshot in one step
+tracegraph compare --upload
+
+# CI — credentials from environment variables
+TRACEGRAPH_SERVER_URL=https://your-team-server.internal \
+TRACEGRAPH_TOKEN=${{ secrets.TRACEGRAPH_TOKEN }} \
+tracegraph upload
+```
+
+---
+
+### 7.26 `tracegraph pull`
+
+Downloads shared baselines and suppression rules from a Team Server, merging them into the
+local `.tracegraph/` directory. Local records take precedence on conflicts.
+
+```
+tracegraph pull [options]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--server <url>` | `TRACEGRAPH_SERVER_URL` env | Team Server base URL |
+| `--token <token>` | `TRACEGRAPH_TOKEN` env | API authentication token |
+| `--project-id <id>` | From `tracegraph.config.json` | Project identifier on the server |
+| `--baselines` | `true` | Pull shared baselines |
+| `--suppressions` | `true` | Pull shared suppression rules |
+| `--dry-run` | — | Print what would be downloaded without downloading |
+
+```bash
+# Pull shared baselines and suppressions
+tracegraph pull --server https://your-team-server.internal
+
+# CI — credentials from environment
+tracegraph pull
 ```
 
 ---
@@ -2360,12 +2896,175 @@ This gives AI tools grounded, runtime-derived context rather than static guesses
 
 ---
 
-## 12. VS Code Extension
+## 12. Static Architecture Analysis
+
+TraceGraph builds a static call graph from your source tree and uses it to detect architectural
+risk, enrich runtime findings with graph context, and track structural drift over time.
+
+### 12.1 Three-Tier Evidence Model
+
+TraceGraph findings carry an `evidenceSources` list that tells you how confident the finding is:
+
+| Evidence source | Meaning |
+|-----------------|---------|
+| `static_graph` | Derived from the call graph structure alone |
+| `inferred` | Inferred from naming conventions, community membership, or blast radius |
+| `runtime_trace` | Directly observed in one or more runtime traces |
+
+A finding with `evidenceSources: ["static_graph", "runtime_trace"]` is confirmed — both the
+graph and a real trace support it. A finding with only `["static_graph"]` is a risk signal
+that has not yet been validated at runtime.
+
+**Example of an inferred finding:** `PaymentService.charge` sits in the `payment` community
+and has 14 callers (high centrality). Even without a runtime trace it receives
+`evidenceSources: ["static_graph", "inferred"]` — its name and community placement are strong
+indicators of security sensitivity. The `confidence` score starts at `0.6` and rises to `0.95`
+once a runtime trace confirms the payment flow.
+
+### 12.2 Assurance Levels
+
+Every compare run and coverage report receives an assurance level (0–5):
+
+| Level | Label | What it means |
+|-------|-------|---------------|
+| 0 | No evidence | No traces and no baseline |
+| 1 | Static only | Graph available; no runtime coverage |
+| 2 | Partial runtime | Runtime traces present but no approved baseline |
+| 3 | Baseline-lite | Static graph matched; `--baseline-lite` mode |
+| 4 | Runtime baseline | Baseline matched; capture level below 5 |
+| 5 | Full assurance | Per-test Level 5 traces with runtime baseline match |
+
+```bash
+# Require at least Level 4 in CI (exits 8 if not met)
+tracegraph compare --min-assurance 4
+```
+
+**`--baseline-lite` mode (Level 3)**
+
+When you have a static graph but no runtime baseline yet (Levels 0–2), pass `--baseline-lite`
+to use the architecture baseline as a structural substitute:
+
+```bash
+tracegraph compare --baseline-lite
+```
+
+In this mode TraceGraph compares the current trace structure against the static graph's
+community boundaries rather than a stored runtime baseline. Community-crossing calls that are
+new, calls into god nodes, and sensitive-community entries all trigger findings. This gives
+meaningful findings before you have a full runtime baseline — useful during onboarding or for
+repositories where capturing Level 5 traces is not yet feasible.
+
+Combine with `--min-assurance` in CI to require at least the baseline-lite level:
+
+```bash
+tracegraph compare --baseline-lite --min-assurance 3
+# Exits 8 if no static graph is available (Level 0–1)
+```
+
+### 12.3 Architecture Baseline Drift Detection
+
+On every PR, TraceGraph can compare the current static graph against a committed architecture
+baseline and flag structural regressions:
+
+```bash
+# In CI — fail if a new cross-community edge points into auth or payment community
+tracegraph architecture compare --fail-on-critical
+```
+
+```
+Architecture Compare
+──────────────────────────────────────────────────────────────
+Baseline:  2026-06-08  312 nodes  7 cross-community edges
+Current:   2026-06-10  316 nodes  9 cross-community edges
+
+Changes:
+  + 4 new nodes
+  + 2 new cross-community edges:
+      OrderService → PaymentService    (NEW — sensitive community target) ⚠️ CRITICAL
+      ReportService → UserService      (NEW — informational)
+
+⚠️  1 critical change: new edge into a sensitive community
+```
+
+### 12.4 Static Findings Summary
+
+| Rule | Trigger | Severity |
+|------|---------|----------|
+| `architecture.god_node_untested` | High in-degree node (god node) with no runtime trace coverage | High |
+| `architecture.high_blast_radius` | Node that would cascade changes widely, no trace coverage | High |
+| `architecture.sensitive_community_unverified` | Auth/payment community with no verified trace | High |
+| `architecture.static_edge_added` | New cross-community call edge vs architecture baseline | Medium |
+| `architecture.community_drift` | New communities detected vs architecture baseline | Medium |
+| `architecture.surprise_edge` | Cross-community runtime call not present in architecture baseline | Medium–High |
+| `architecture.sensitive_community_crossed` | Runtime call into a sensitive community that is new | High |
+
+Architecture findings appear in the CI report under a dedicated **🏗️ Architecture findings**
+section alongside security, reliability, and policy findings.
+
+---
+
+## 13. MCP Server
+
+The TraceGraph MCP server exposes static graph and runtime trace data as callable tools for
+AI tools (Claude Code, Cursor, and any MCP-compatible assistant).
+
+### 13.1 Starting the Server
+
+```bash
+tracegraph mcp start [--project-dir <path>] [--no-graph] [--no-traces] [--no-findings]
+```
+
+Register it in your AI tool's MCP configuration:
+
+```json
+{
+  "mcpServers": {
+    "tracegraph": {
+      "command": "tracegraph",
+      "args": ["mcp", "start"],
+      "cwd": "/path/to/your/project"
+    }
+  }
+}
+```
+
+### 13.2 Available Tools
+
+| Tool | What it returns |
+|------|----------------|
+| `tracegraph.graph.get_node` | Node metadata (community, degree, file, god-node flag) |
+| `tracegraph.graph.get_neighbors` | Direct callers + callees of a node |
+| `tracegraph.graph.get_community` | All nodes in a named community |
+| `tracegraph.graph.get_god_nodes` | List of god nodes ranked by degree |
+| `tracegraph.graph.find_path` | Shortest call path between two node symbols |
+| `tracegraph.trace.find_events_for_node` | Runtime events matching a symbol name |
+| `tracegraph.coverage.get_uncovered_changed_nodes` | Changed functions with no runtime trace coverage |
+| `tracegraph.findings.explain_with_architecture` | Finding explanation enriched with blast radius and community context |
+
+All tools degrade gracefully — they return a descriptive message rather than crashing when
+the graph, traces, or findings are absent.
+
+### 13.3 Example Session
+
+```
+→ tracegraph.graph.get_god_nodes {}
+  [{ "symbol": "UserService", "degree": 47, "community": "auth", "isGodNode": true }, ...]
+
+→ tracegraph.graph.find_path { "from": "OrderController", "to": "PaymentService" }
+  ["OrderController", "InvoiceService", "PaymentService"]
+
+→ tracegraph.trace.find_events_for_node { "symbol": "InvoiceService.create" }
+  [{ "traceId": "trace_abc", "eventType": "function_call", "durationMs": 45 }, ...]
+```
+
+---
+
+## 14. VS Code Extension
 
 The TraceGraph VS Code extension brings the full trace graph, timeline, error path views, and
 source navigation directly into the editor — without leaving VS Code.
 
-### 12.1 Architecture
+### 14.1 Architecture
 
 ```
 VS Code Extension
@@ -2386,7 +3085,7 @@ Extension reads file → renders in Webview panel
 The extension **never reads `.tmp` files**. It waits for the `trace.completed` JSONL event on
 stdout, then reads the finalised `.trace.json`. This guarantees it never sees a partial file.
 
-### 12.2 Sidebar Trees
+### 14.2 Sidebar Trees
 
 The TraceGraph activity bar icon opens four auto-refreshing trees:
 
@@ -2416,7 +3115,7 @@ TraceGraph (sidebar)
 
 Trees auto-refresh when files change in `.tracegraph/`.
 
-### 12.3 Graph Panel Views
+### 14.3 Graph Panel Views
 
 Clicking any trace item opens it in a Webview panel with three view modes:
 
@@ -2449,7 +3148,7 @@ Walks `causalParentEventId → parentEventId` chains backward from every `error`
 trace root. Only the causal ancestors are shown; unrelated branches are dimmed. Useful for
 quickly finding "what led to this exception."
 
-### 12.4 Commands (Command Palette)
+### 14.4 Commands (Command Palette)
 
 | Command | Description |
 |---------|-------------|
@@ -2461,7 +3160,7 @@ quickly finding "what led to this exception."
 | `TraceGraph: Generate AI Context Packs` | Runs `tracegraph pack --format all` |
 | `TraceGraph: Refresh` | Forces a tree refresh |
 
-### 12.5 Guided Baseline Creation
+### 14.5 Guided Baseline Creation
 
 When a new `.trace.json` appears and no baseline exists for that trace, the extension shows
 an information message:
@@ -2481,7 +3180,7 @@ immediately prompts you to capture the baseline.
 
 Disable with `"tracegraph.baselineGuidance": false` in settings.
 
-### 12.6 VS Code Settings
+### 14.6 VS Code Settings
 
 ```jsonc
 // settings.json
@@ -2495,9 +3194,9 @@ Disable with `"tracegraph.baselineGuidance": false` in settings.
 
 ---
 
-## 13. CI Integration
+## 15. CI Integration
 
-### 13.1 GitHub Action (Marketplace)
+### 15.1 GitHub Action (Marketplace)
 
 The official TraceGraph GitHub Action handles setup, caching, tracing, comparison, and
 step summaries in one composite action. It is published to the GitHub Marketplace as
@@ -2570,7 +3269,7 @@ jobs:
   run: echo "Critical findings detected"
 ```
 
-### 13.2 GitHub Actions — Manual Setup (JavaScript/TypeScript)
+### 15.2 GitHub Actions — Manual Setup (JavaScript/TypeScript)
 
 If you need more control than the composite action provides:
 
@@ -2616,7 +3315,7 @@ jobs:
           retention-days: 14
 ```
 
-### 13.3 GitHub Actions — Laravel / PHP
+### 15.3 GitHub Actions — Laravel / PHP
 
 ```yaml
 name: TraceGraph Assurance (Laravel)
@@ -2660,7 +3359,7 @@ jobs:
         run: tracegraph report --format github-step-summary --out "$GITHUB_STEP_SUMMARY"
 ```
 
-### 13.4 Suppression File Policy
+### 15.4 Suppression File Policy
 
 Any PR that modifies `.tracegraph/suppressions/tracegraph.suppressions.json` automatically
 triggers a `policy.suppressions_modified` finding and exits with code 4:
@@ -2673,7 +3372,7 @@ triggers a `policy.suppressions_modified` finding and exits with code 4:
   # → requires explicit reviewer approval before merge
 ```
 
-### 13.5 What to Commit vs. Gitignore
+### 15.5 What to Commit vs. Gitignore
 
 ```
 .tracegraph/
@@ -2693,12 +3392,14 @@ triggers a `policy.suppressions_modified` finding and exits with code 4:
 
 ---
 
-## 14. Sample Projects
+## 16. Sample Projects
 
 All sample projects live under `sample-projects/` in the repository. Each is a standalone,
 self-contained project you can `cd` into and run immediately.
 
-### 14.1 Express TypeScript API
+> **Note:** All paths below are relative to the TraceGraph repository root.
+
+### 16.1 Express TypeScript API
 
 **Location:** `sample-projects/express-typescript`
 
@@ -2750,7 +3451,7 @@ app.use(traceExpress({
 
 ---
 
-### 14.2 Node Script / Batch Processor
+### 16.2 Node Script / Batch Processor
 
 **Location:** `sample-projects/node-script`
 
@@ -2771,7 +3472,7 @@ npx tracegraph open --html .tracegraph/traces/*.trace.json
 
 ---
 
-### 14.3 Inventory Service (Vitest)
+### 16.3 Inventory Service (Vitest)
 
 **Location:** `sample-projects/inventory-service`
 
@@ -2788,7 +3489,7 @@ ls .tracegraph/traces/
 
 ---
 
-### 14.4 Order Service (Vitest)
+### 16.4 Order Service (Vitest)
 
 **Location:** `sample-projects/order-service`
 
@@ -2805,7 +3506,7 @@ npx tracegraph open --html .tracegraph/traces/*.trace.json
 
 ---
 
-### 14.5 Laravel API (PHP)
+### 16.5 Laravel API (PHP)
 
 **Location:** `sample-projects/laravel-api`
 
@@ -2871,7 +3572,7 @@ tracegraph open --html .tracegraph/traces/<traceId>.trace.json
 
 ---
 
-## 15. File System Layout
+## 17. File System Layout
 
 ```
 <project-root>/
@@ -2932,7 +3633,7 @@ tracegraph open --html .tracegraph/traces/<traceId>.trace.json
 
 ---
 
-## 16. Configuration Reference
+## 18. Configuration Reference
 
 `tracegraph.config.json` (created by `tracegraph init`):
 
@@ -3010,7 +3711,7 @@ tracegraph open --html .tracegraph/traces/<traceId>.trace.json
 
 ---
 
-## 17. Exit Codes
+## 19. Exit Codes
 
 TraceGraph uses distinct exit codes so CI pipelines can act differently on each outcome:
 
@@ -3023,6 +3724,7 @@ TraceGraph uses distinct exit codes so CI pipelines can act differently on each 
 | `4` | `POLICY_REVIEW` | Suppressions file has uncommitted changes in git |
 | `5` | `SCHEMA_MIGRATION` | A trace or baseline has a mismatched schema version |
 | `6` | `CAPTURE_LEVEL_INSUFFICIENT` | Capture level is below the configured minimum |
+| `8` | `ASSURANCE_LEVEL_INSUFFICIENT` | Assurance level is below the `--min-assurance` threshold |
 
 **Why `--fail-on-critical` exits 3, not 1:**
 
@@ -3043,7 +3745,20 @@ a security/behaviour regression". CI can treat these differently:
 
 ---
 
-## 18. Troubleshooting
+## 20. Troubleshooting
+
+### Windows and WSL2
+
+TraceGraph runs natively on Windows via PowerShell or Command Prompt, but some workflows work
+more reliably under WSL2 or Git Bash:
+
+- **`tracegraph run -- npm test`** works natively. If you see `ENOENT` errors, use `npx tracegraph`
+  and ensure Node.js is on your `%PATH%`.
+- **Git Bash** — recommended for Windows if you encounter shell quoting issues with flags.
+- **WSL2** — recommended for PHP/Laravel projects; the Laravel adapter expects a POSIX shell
+  environment for process forking.
+- **Windows Defender** — may flag `tracegraph` on first run as an unknown executable; add an
+  exclusion for the npm global bin directory (`%APPDATA%\npm`).
 
 ### "No traces found" after `tracegraph run`
 

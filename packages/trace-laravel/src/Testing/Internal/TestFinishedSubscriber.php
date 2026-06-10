@@ -93,6 +93,44 @@ final class TestFinishedSubscriber implements FinishedSubscriber
         }
 
         $this->writeJsonl($testTraceId, [$fileEvent, $testRunEvent]);
+        $this->writeCaptureLevel();
+    }
+
+    /**
+     * Writes capture-level.json at Level 5 to the run directory.
+     *
+     * Called after every test so the file always reflects the highest capture
+     * level achieved.  EventWriter::writeShutdownArtifacts (Level 1/2) fires
+     * AFTER all tests complete — the non-downgrade guard there ensures it will
+     * not overwrite this Level 5 value.
+     */
+    private function writeCaptureLevel(): void
+    {
+        $runDir = getenv('TRACEGRAPH_RUN_DIR');
+        if ($runDir === false || $runDir === '') {
+            return;
+        }
+
+        $captureLevel = [
+            'overall' => 5,
+            'label'   => 'PHPUnit extension (per-test traces + test structure + results)',
+            'adapters' => [
+                'phpunit' => [
+                    'level'    => 5,
+                    'mode'     => 'extension',
+                    'captured' => ['test_file', 'test_run', 'test_status', 'error'],
+                ],
+            ],
+        ];
+
+        try {
+            file_put_contents(
+                $runDir . DIRECTORY_SEPARATOR . 'capture-level.json',
+                json_encode($captureLevel, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n",
+            );
+        } catch (\Throwable) {
+            // Best-effort
+        }
     }
 
     private function writeJsonl(string $testTraceId, array $events): void

@@ -110,10 +110,31 @@ final class EventWriter
     /**
      * Appends a TraceEvent as a JSON line to the .events.jsonl.tmp file.
      * Never throws — tracing must never crash the application.
+     *
+     * Phase 2 invasive: when TRACEGRAPH_INVASIVE >= 2, also records the current
+     * PHP call stack into CallEdgeCapture so that runtime caller→callee edges can
+     * be derived from application frames and merged into the static graph.
      */
     public function write(array $event): void
     {
         try {
+            // Phase 2: capture backtrace at the point of every application event
+            // (http_request, db_query, auth_check, etc.).  Only active when
+            // TRACEGRAPH_INVASIVE >= 2; guarded here so debug_backtrace() is never
+            // called in normal (non-Phase-2) mode — it has non-trivial overhead.
+            // We cache the env-var check in a static variable so getenv() is only
+            // called once per PHP process.
+            static $invasiveLevel = null;
+            if ($invasiveLevel === null) {
+                $invasiveLevel = (int) (getenv('TRACEGRAPH_INVASIVE') ?: '0');
+            }
+            if ($invasiveLevel >= 2) {
+                \Tracegraph\Laravel\Invasive\CallEdgeCapture::getInstance()?->record(
+                    // @phpstan-ignore-next-line
+                    debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 25),
+                );
+            }
+
             $line = json_encode($event, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) . "\n";
             // file_put_contents with LOCK_EX is safe for single-threaded PHP-FPM per request.
             // For high concurrency, fopen/flock would be safer, but JSONL ordering
@@ -160,10 +181,25 @@ final class EventWriter
             ],
         ];
 
-        $this->writeSafeJson(
-            $this->runDir . DIRECTORY_SEPARATOR . 'capture-level.json',
-            $captureLevel,
-        );
+        $captureLevelPath = $this->runDir . DIRECTORY_SEPARATOR . 'capture-level.json';
+
+        // Non-downgrade guard: the PHPUnit extension writes Level 5 during test
+        // execution.  This shutdown handler fires AFTER all tests — don't overwrite
+        // a higher level with Level 1/2.
+        $existingLevel = 0;
+        try {
+            $raw = file_get_contents($captureLevelPath);
+            if ($raw !== false) {
+                $decoded = json_decode($raw, true);
+                if (isset($decoded['overall']) && is_int($decoded['overall'])) {
+                    $existingLevel = $decoded['overall'];
+                }
+            }
+        } catch (\Throwable) { /* file absent or unreadable — proceed */ }
+
+        if ($existingLevel <= $level) {
+            $this->writeSafeJson($captureLevelPath, $captureLevel);
+        }
 
         // meta.json tells the CLI this trace came from PHP/Laravel
         $this->writeSafeJson(

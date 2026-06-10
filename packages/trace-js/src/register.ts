@@ -25,9 +25,27 @@ import { TRACEGRAPH_ENV } from './env';
 
 let initialised = false;
 
+/**
+ * Returns true when the current process is a package manager (pnpm, npm,
+ * yarn, bun, corepack, npx).  NODE_OPTIONS propagates to every Node.js
+ * process in the tree, so without this guard the hooks would activate in
+ * pnpm itself — patching its undici/fetch internals before it even spawns
+ * the test runner, causing a silent crash.
+ */
+function isPackageManagerProcess(): boolean {
+  const argv1 = process.argv[1] ?? '';
+  const base = path.basename(argv1).toLowerCase().replace(/\.[cm]?js$/, '');
+  return /^(pnpm|pnpm-cli|npm|npm-cli|npx|npx-cli|yarn|yarn-cli|bun|corepack)$/.test(base);
+}
+
 export function init(): void {
   if (initialised) return;
   initialised = true;
+
+  // No-op in package managers — hooks are safe to propagate via NODE_OPTIONS
+  // because isPackageManagerProcess() blocks them at pnpm/npm/yarn level.
+  // The test runner (vitest, jest) inherits the same env and activates normally.
+  if (isPackageManagerProcess()) return;
 
   const writer = ChildEventWriter.get();
   if (!writer) {
@@ -102,12 +120,20 @@ export function init(): void {
   });
 
   // ── Write capture-level file on exit ─────────────────────────────────────
+  // Only write Level 1 as a fallback — don't downgrade if a reporter (vitest,
+  // jest) already wrote a higher level (e.g. 5) via onTestRunEnd/onFinished.
+  // onTestRunEnd is synchronous and runs before process.on('exit') handlers.
   process.on('exit', () => {
     const runDir = process.env[TRACEGRAPH_ENV.RUN_DIR];
     if (!runDir) return;
+    const captureLevelPath = path.join(runDir, 'capture-level.json');
+    try {
+      const existing = JSON.parse(fs.readFileSync(captureLevelPath, 'utf8'));
+      if ((existing as { overall?: number }).overall > 1) return;
+    } catch { /* file absent or unreadable — fall through to write */ }
     try {
       fs.writeFileSync(
-        path.join(runDir, 'capture-level.json'),
+        captureLevelPath,
         JSON.stringify({
           overall: 1,
           label:   'Framework-level tracing',

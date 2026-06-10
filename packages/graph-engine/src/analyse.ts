@@ -11,6 +11,13 @@
  *   M5.7  reliability.duplicate_side_effects   — same side-effect dispatched ≥ 2×
  *   M5.8  reliability.missing_transaction      — multi-table writes without a transaction
  *
+ * Entrypoint scoping:
+ *   Rules M5.6 and M5.7 assume the session represents a single isolated
+ *   request lifecycle (http_request or test_case entrypoints).  They are
+ *   automatically suppressed for cli_command sessions (full test-suite runs
+ *   captured at Level 1) where independent tests naturally repeat queries and
+ *   side-effect calls across the run.
+ *
  * IMP-3.1: Rule configuration
  *   Accepts an optional `ruleConfig` map keyed by ruleId.
  *   Supports: `disabled`, `severity`, `thresholds.repetitionCount`.
@@ -27,10 +34,11 @@ import type {
 // ─── Rule IDs ─────────────────────────────────────────────────────────────────
 
 export const ANALYSE_RULES = {
-  SENSITIVE_DATA_IN_RESPONSE: 'security.sensitive_data.in_response',
-  N_PLUS_ONE_QUERY:           'reliability.n_plus_one_query',
-  DUPLICATE_SIDE_EFFECTS:     'reliability.duplicate_side_effects',
-  MISSING_TRANSACTION:        'reliability.missing_transaction',
+  SENSITIVE_DATA_IN_RESPONSE:        'security.sensitive_data.in_response',
+  N_PLUS_ONE_QUERY:                  'reliability.n_plus_one_query',
+  DUPLICATE_SIDE_EFFECTS:            'reliability.duplicate_side_effects',
+  DUPLICATE_TEST_CLIENT_REQUESTS:    'reliability.duplicate_test_client_requests',
+  MISSING_TRANSACTION:               'reliability.missing_transaction',
 } as const;
 
 // ─── Remediation registry (IMP-3.3) ──────────────────────────────────────────
@@ -223,6 +231,14 @@ function detectNPlusOneQuery(
   const ruleId = ANALYSE_RULES.N_PLUS_ONE_QUERY;
   if (isDisabled(ruleId, cfg)) return [];
 
+  // N+1 detection assumes the session represents a single isolated request
+  // lifecycle.  For cli_command traces (entire test suite run captured at
+  // Level 1), independent tests naturally repeat the same queries — the
+  // repetition is expected and not an N+1 pattern.  Per-test sessions
+  // (test_case entrypoint, Level 5) are correctly isolated and this rule
+  // applies there.
+  if (session.entrypoint.type === 'cli_command') return [];
+
   const nPlusOneThreshold = threshold(ruleId, 'repetitionCount', DEFAULT_N_PLUS_ONE_THRESHOLD, cfg);
   const findings: Finding[] = [];
 
@@ -276,6 +292,47 @@ function detectNPlusOneQuery(
   return findings;
 }
 
+// ─── G12: HTTP call origin classifier ────────────────────────────────────────
+
+/**
+ * Classifies the origin of an outbound HTTP call URL so that duplicate-side-
+ * effect detection can apply different severity levels and titles depending on
+ * whether the call targets a local test server (supertest / app.listen style),
+ * a real external service, or an unclassifiable URL.
+ *
+ * - `'test_client'`:  empty URL, relative path, or a loopback/LAN hostname
+ *                     (localhost, 127.x, ::1, 0.0.0.0, *.local, 192.168.*, 10.*)
+ * - `'external'`:     URL with a parseable, non-loopback hostname
+ * - `'unknown'`:      URL that cannot be parsed as a valid URL
+ */
+function classifyHttpCallOrigin(url: string): 'test_client' | 'external' | 'unknown' {
+  try {
+    // Relative paths and empty strings always refer to the local test server.
+    if (!url || url.startsWith('/') || !url.includes('://')) return 'test_client';
+
+    const parsed   = new URL(url);
+    const hostname = parsed.hostname.toLowerCase();
+
+    if (
+      hostname === 'localhost'   ||
+      hostname === '127.0.0.1'  ||
+      hostname === '0.0.0.0'    ||
+      hostname === '::1'        ||
+      hostname.endsWith('.local') ||
+      /^127\.\d+\.\d+\.\d+$/.test(hostname)    ||
+      /^192\.168\.\d+\.\d+$/.test(hostname)     ||
+      /^10\.\d+\.\d+\.\d+$/.test(hostname)      ||
+      /^172\.(1[6-9]|2\d|3[01])\.\d+\.\d+$/.test(hostname)
+    ) {
+      return 'test_client';
+    }
+
+    return 'external';
+  } catch {
+    return 'unknown';
+  }
+}
+
 // ─── M5.7: Duplicate side effects ─────────────────────────────────────────────
 
 function detectDuplicateSideEffects(
@@ -285,11 +342,22 @@ function detectDuplicateSideEffects(
   const ruleId = ANALYSE_RULES.DUPLICATE_SIDE_EFFECTS;
   if (isDisabled(ruleId, cfg)) return [];
 
+  // Duplicate side-effect detection assumes the session represents a single
+  // isolated request lifecycle.  For cli_command traces (full test suite run
+  // at Level 1), independent tests naturally call the same outbound URLs and
+  // dispatch the same jobs — the repetition is expected and not a bug.
+  // Per-test sessions (test_case entrypoint, Level 5) are correctly isolated
+  // and this rule applies there.
+  if (session.entrypoint.type === 'cli_command') return [];
+
   const findings: Finding[] = [];
 
   type Entry = { count: number; eventIds: string[] };
-  const queueGroups: Map<string, Entry>    = new Map();
-  const outboundGroups: Map<string, Entry> = new Map();
+  const queueGroups:      Map<string, Entry> = new Map();
+  // G12: three buckets by HTTP call origin so severity/messaging is accurate
+  const testClientGroups: Map<string, Entry> = new Map();
+  const externalGroups:   Map<string, Entry> = new Map();
+  const unknownGroups:    Map<string, Entry> = new Map();
 
   for (const event of session.events) {
     if (event.type === 'queue_event' && event.name) {
@@ -302,13 +370,18 @@ function detectDuplicateSideEffects(
       ).toUpperCase();
       if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) continue;
 
-      const url = String(
+      const url    = String(
         (event.metadata?.['url'] as string | undefined) ?? event.name ?? '',
       );
-      addToGroup(outboundGroups, `${method}:${url}`, event.eventId);
+      const origin = classifyHttpCallOrigin(url);
+      const bucket = origin === 'test_client' ? testClientGroups
+                   : origin === 'external'    ? externalGroups
+                   : unknownGroups;
+      addToGroup(bucket, `${method}:${url}`, event.eventId);
     }
   }
 
+  // ── Queue duplicates ──────────────────────────────────────────────────────
   for (const [name, entry] of queueGroups) {
     if (entry.count < 2) continue;
     const fingerprint = fp(ruleId, session.traceId, `queue:${name}`);
@@ -330,7 +403,38 @@ function detectDuplicateSideEffects(
     });
   }
 
-  for (const [key, entry] of outboundGroups) {
+  // ── G12: Test-client HTTP duplicates (severity: info) ────────────────────
+  // These calls target localhost / the in-process test server (e.g. supertest).
+  // Repeated requests to the test server within a single test are expected in
+  // integration test suites and do not indicate a production bug.
+  const testClientRuleId = ANALYSE_RULES.DUPLICATE_TEST_CLIENT_REQUESTS;
+  for (const [key, entry] of testClientGroups) {
+    if (entry.count < 2) continue;
+    const colonIdx = key.indexOf(':');
+    const method   = key.slice(0, colonIdx);
+    const url      = key.slice(colonIdx + 1);
+    const fingerprint = fp(testClientRuleId, session.traceId, key);
+    findings.push({
+      id:          `find_${fingerprint}`,
+      fingerprint,
+      ruleId:      testClientRuleId,
+      severity:    effectiveSeverity(testClientRuleId, 'info', cfg),
+      category:    'data_integrity',
+      title:       `Repeated test-client request: ${method} "${url}" × ${entry.count}`,
+      description: `The test harness made ${entry.count} ${method} requests to "${url}" in a ` +
+                   `single test session. This is typical for integration tests using a local ` +
+                   `HTTP client (e.g. supertest, httptest) and is usually not a production concern.`,
+      evidence:    [{ traceId: session.traceId, eventIds: entry.eventIds }],
+      recommendation:
+        `Verify that each request is intentional in the test scenario. ` +
+        `If not, ensure the test setup does not accidentally repeat requests (e.g. ` +
+        `duplicate beforeEach hooks or shared test clients that auto-retry).`,
+      remediation: REMEDIATIONS[ruleId],
+    });
+  }
+
+  // ── G12: External HTTP duplicates (severity: medium) ─────────────────────
+  for (const [key, entry] of externalGroups) {
     if (entry.count < 2) continue;
     const colonIdx = key.indexOf(':');
     const method   = key.slice(0, colonIdx);
@@ -343,9 +447,34 @@ function detectDuplicateSideEffects(
       severity:    effectiveSeverity(ruleId, 'medium', cfg),
       category:    'data_integrity',
       title:       `Duplicate outbound ${method}: "${url}" × ${entry.count}`,
+      description: `An outbound ${method} request to the external service "${url}" was made ` +
+                   `${entry.count} times in a single request. This may cause unintended duplicate ` +
+                   `writes or side effects on the remote service.`,
+      evidence:    [{ traceId: session.traceId, eventIds: entry.eventIds }],
+      recommendation:
+        `Check whether the call appears in a loop or on multiple branches. ` +
+        `If idempotency is required, pass an idempotency key in the request headers.`,
+      remediation: REMEDIATIONS[ruleId],
+    });
+  }
+
+  // ── G12: Unknown-origin HTTP duplicates (severity: low) ──────────────────
+  for (const [key, entry] of unknownGroups) {
+    if (entry.count < 2) continue;
+    const colonIdx = key.indexOf(':');
+    const method   = key.slice(0, colonIdx);
+    const url      = key.slice(colonIdx + 1);
+    const fingerprint = fp(ruleId, session.traceId, `unknown:${key}`);
+    findings.push({
+      id:          `find_${fingerprint}`,
+      fingerprint,
+      ruleId,
+      severity:    effectiveSeverity(ruleId, 'low', cfg),
+      category:    'data_integrity',
+      title:       `Possible duplicate outbound ${method}: "${url}" × ${entry.count}`,
       description: `An outbound ${method} request to "${url}" was made ${entry.count} times in a ` +
-                   `single request. This may cause unintended duplicate writes or side effects on ` +
-                   `the remote service.`,
+                   `single request. The URL could not be classified as a test-client or external ` +
+                   `call — review whether duplicate calls are intentional.`,
       evidence:    [{ traceId: session.traceId, eventIds: entry.eventIds }],
       recommendation:
         `Check whether the call appears in a loop or on multiple branches. ` +

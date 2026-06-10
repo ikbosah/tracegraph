@@ -1,0 +1,28 @@
+{
+  "name": "@tracegraph/static-graph",
+  "version": "0.3.0",
+  "description": "Static architecture graph provider for TraceGraph (Graphify integration)",
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsup src/index.ts --format cjs,esm --external '@tracegraph/*' && node -e \"const fs=require('fs'),p='../cli/node_modules/@tracegraph/static-graph/dist';try{fs.copyFileSync('dist/index.js',p+'/index.js');fs.copyFileSync('dist/index.mjs',p+'/index.mjs');console.log('[static-graph] synced to cli junction');}catch(e){console.log('[static-graph] junction sync skipped:',e.code);}\"",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@tracegraph/shared-types": "workspace:*"
+  }
+}

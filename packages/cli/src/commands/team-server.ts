@@ -86,6 +86,35 @@ export async function uploadToTeamServer(
   }
 }
 
+// ─── uploadArchitectureSnapshot ─────────────────────────────────────────────
+
+/**
+ * G9 — Upload the local architecture baseline as a snapshot to the Team Server.
+ * Called by `compare --upload` when .tracegraph/static-graph/architecture-baseline.json exists.
+ * Returns the created snapshot ID on success, null on failure (non-fatal).
+ */
+export async function uploadArchitectureSnapshot(
+  opts:       TeamServerOptions,
+  serverRunId: string,
+  baselineJson: unknown,
+): Promise<string | null> {
+  const projectId = opts.projectId ?? deriveProjectId();
+
+  try {
+    const res = await jsonPost(
+      `${opts.serverUrl}/api/v1/projects/${projectId}/architecture?run_id=${encodeURIComponent(serverRunId)}`,
+      baselineJson,
+      opts.token,
+    );
+    return (res as { id?: string }).id ?? null;
+  } catch (err) {
+    process.stderr.write(
+      `[tracegraph] Team Server: architecture snapshot upload failed — ${String(err)}\n`,
+    );
+    return null;
+  }
+}
+
 // ─── pullBaselinesFromTeamServer ─────────────────────────────────────────────
 
 export async function pullBaselinesFromTeamServer(

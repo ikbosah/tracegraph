@@ -35,15 +35,19 @@ final class GateEventListener
     /**
      * Called after every Gate check.
      *
+     * $result is typed as mixed because Laravel 10+ Gate::after() passes either
+     * a bool|null OR an Illuminate\Auth\Access\Response object depending on the
+     * policy return type.  We normalise to bool|null for the event payload.
+     *
      * @param  \Illuminate\Contracts\Auth\Authenticatable|null  $user
      * @param  string                                           $ability
-     * @param  bool|null                                        $result
+     * @param  mixed                                            $result  bool|null|Response
      * @param  array<mixed>                                     $arguments
      */
     public function handle(
         mixed $user,
         string $ability,
-        bool|null $result,
+        mixed $result,
         array $arguments = [],
     ): void {
         $writer = EventWriter::getInstance();
@@ -53,6 +57,15 @@ final class GateEventListener
 
         $userId      = $this->extractUserId($user);
         $displayName = $this->inferDisplayName($ability, $arguments);
+
+        // Normalise result to bool|null.
+        // Illuminate\Auth\Access\Response has an allowed() method; plain bool passes through.
+        $boolResult = null;
+        if (is_bool($result)) {
+            $boolResult = $result;
+        } elseif (is_object($result) && method_exists($result, 'allowed')) {
+            $boolResult = (bool) $result->allowed();
+        }
 
         $writer->write([
             'schemaVersion'    => 'tracegraph.event.v1',
@@ -66,9 +79,9 @@ final class GateEventListener
             'displayName'      => $displayName,
             'startTime'        => (int) round(microtime(true) * 1000),
             'metadata'         => [
-                'ability'          => $ability,
-                'result'           => $result,
-                'userId'           => $userId,
+                'ability'           => $ability,
+                'result'            => $boolResult,
+                'userId'            => $userId,
                 'security.critical' => true,
             ],
         ]);

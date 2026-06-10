@@ -12,6 +12,8 @@
       "@tracegraph/graph-engine":    ["../graph-engine/src/index.ts"],
       "@tracegraph/ci-reporter":      ["../ci-reporter/src/index.ts"],
       "@tracegraph/scenario-runner":  ["../scenario-runner/src/index.ts"],
+      "@tracegraph/static-graph":     ["../static-graph/src/index.ts"],
+      "@tracegraph/static-graph/*":   ["../static-graph/src/*"],
       "@tracegraph/vitest":           ["../trace-vitest/src/index.ts"]
     }
   },

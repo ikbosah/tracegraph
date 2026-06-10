@@ -20,12 +20,21 @@ import type { TraceEvent, SemanticSignature, EventRole } from '@tracegraph/share
 const VALIDATION_RE = /validate|verify|check|assert|ensure|guard|permission|authorize/i;
 const AUTH_EVENT_TYPES = new Set(['auth_check', 'authorization_check']);
 
+/** G6: PHPUnit / Jest / Vitest test-runner event types — never application logic. */
+const TEST_ARTIFACT_TYPES = new Set(['test_file', 'test_run', 'test_suite', 'test_case']);
+
 /**
  * Classify an event into a semantic role.
  * Auth events → "authorization"; validation-named functions → "validation";
- * db_query → "db"; external_http_call → "external_call"; else → "business_logic".
+ * db_query → "db"; external_http_call → "external_call";
+ * test runner events → "test_artifact"; else → "business_logic".
  */
 export function classifyRole(event: TraceEvent): EventRole {
+  // G6: test-runner events are never application business logic.
+  // Classifying them separately prevents PHPUnit/Jest trace artifacts from
+  // generating false-positive "business logic removed" findings.
+  if (TEST_ARTIFACT_TYPES.has(event.type)) return 'test_artifact';
+
   if (AUTH_EVENT_TYPES.has(event.type)) return 'authorization';
   if (event.type === 'db_query')             return 'db';
   if (event.type === 'external_http_call')   return 'external_call';

@@ -1132,7 +1132,7 @@ function renderVerdictSection(
       } else {
         lines.push('| 2 | Suppress findings that are false positives: `tracegraph suppress <fingerprint>` |');
       }
-      lines.push('| 3 | Do not merge until all high/critical findings are resolved or suppressed with documented justification |');
+      lines.push('| 3 | Resolve or suppress all high/critical findings with documented justification before merging |');
     } else if (hasEvidenceCont) {
       // Evidence-continuity-only: guide reviewers toward checking missing tests
       lines.push('| 1 | Verify each missing test — was it renamed, removed, or is it failing due to an environment issue? |');

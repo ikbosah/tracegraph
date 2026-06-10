@@ -158,8 +158,17 @@ describe('normalizeGraphify', () => {
   });
 
   it('uses 95 as default god-node threshold', () => {
-    const graph  = normalizeGraphify(FIXTURE_GRAPH, {}); // no threshold specified
-    // Only the node with the very highest percentile (n1, degree 98) should be a god node
+    // 20 nodes: 1 high-degree (100) + 19 low-degree (1).
+    // Top node percentile = round(19/20 × 100) = 95, which meets the default 95 threshold.
+    const fillerNodes = Array.from({ length: 19 }, (_, i) => ({
+      id: `filler_${i}`, name: `fn${i}`, type: 'function' as const, degree: 1,
+    }));
+    const testGraph: GraphifyGraph = {
+      nodes: [{ id: 'top', name: 'bigFn', qualified_name: 'BigClass::bigFn', type: 'method', degree: 100 }, ...fillerNodes],
+      edges: [],
+      communities: [],
+    };
+    const graph = normalizeGraphify(testGraph, {}); // no threshold → default 95
     const godNodes = graph.nodes.filter((n) => n.isGodNode);
     expect(godNodes.length).toBeGreaterThanOrEqual(1);
     expect(godNodes.every((n) => n.centralityPercentile >= 95)).toBe(true);

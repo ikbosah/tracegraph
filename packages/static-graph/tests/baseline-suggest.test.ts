@@ -138,7 +138,7 @@ describe('suggestBaselines — with static graph', () => {
     mkdirs([tracesDir, baselinesDir, scenariosDir]);
 
     // Write two traces: checkout (god node) and health (no god node)
-    writeJson(path.join(tracesDir, 'trace_checkout.json'), makeTrace(
+    writeJson(path.join(tracesDir, 'checkout.trace.json'), makeTrace(
       'checkout', { method: 'POST', path: '/checkout' },
       [
         { type: 'function_call', name: 'PaymentProcessor::charge', className: 'PaymentProcessor', methodName: 'charge', file: 'src/PaymentProcessor.php' },
@@ -146,12 +146,12 @@ describe('suggestBaselines — with static graph', () => {
       ],
     ));
 
-    writeJson(path.join(tracesDir, 'trace_health.json'), makeTrace(
+    writeJson(path.join(tracesDir, 'health.trace.json'), makeTrace(
       'health', { method: 'GET', path: '/health' },
       [{ type: 'function_call', name: 'formatDate', functionName: 'formatDate', file: 'src/helpers.ts' }],
     ));
 
-    writeJson(path.join(tracesDir, 'trace_login.json'), makeTrace(
+    writeJson(path.join(tracesDir, 'login.trace.json'), makeTrace(
       'login', { method: 'POST', path: '/auth/login' },
       [{ type: 'function_call', name: 'AuthMiddleware::handle', className: 'AuthMiddleware', methodName: 'handle', file: 'src/AuthMiddleware.php' }],
     ));
@@ -231,7 +231,7 @@ describe('suggestBaselines — with static graph', () => {
 
   it('returns correct traceCount for each entrypoint', () => {
     // Write a second checkout trace
-    writeJson(path.join(tracesDir, 'trace_checkout2.json'), makeTrace(
+    writeJson(path.join(tracesDir, 'checkout2.trace.json'), makeTrace(
       'checkout_2', { method: 'POST', path: '/checkout' },
       [{ type: 'function_call', name: 'PaymentProcessor::charge', className: 'PaymentProcessor', methodName: 'charge', file: 'src/PaymentProcessor.php' }],
     ));
@@ -244,7 +244,7 @@ describe('suggestBaselines — with static graph', () => {
     expect(checkout!.traceCount).toBeGreaterThanOrEqual(2);
 
     // Clean up
-    fs.unlinkSync(path.join(tracesDir, 'trace_checkout2.json'));
+    fs.unlinkSync(path.join(tracesDir, 'checkout2.trace.json'));
   });
 
   it('includes reasons for the score', () => {
@@ -269,10 +269,10 @@ describe('suggestBaselines — without static graph (graceful degradation)', () 
     scenariosDir = path.join(tmpDir, 'scenarios-no-graph');
     mkdirs([tracesDir, baselinesDir, scenariosDir]);
 
-    writeJson(path.join(tracesDir, 'trace_a.json'), makeTrace(
+    writeJson(path.join(tracesDir, 'a.trace.json'), makeTrace(
       'a', { method: 'GET', path: '/orders' }, [],
     ));
-    writeJson(path.join(tracesDir, 'trace_b.json'), makeTrace(
+    writeJson(path.join(tracesDir, 'b.trace.json'), makeTrace(
       'b', { method: 'POST', path: '/invoices' }, [],
     ));
   });

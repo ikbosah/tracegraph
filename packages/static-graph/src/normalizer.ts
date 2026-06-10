@@ -206,13 +206,16 @@ function normalizeNodeType(raw?: string): NormalizedNodeType {
 /** Extract the short display name from a fully qualified symbol name. */
 function extractDisplayName(symbolName: string | undefined | null): string {
   if (!symbolName) return '';
-  // Handles: "App\\Http\\Controllers\\PaymentController::charge" → "PaymentController::charge"
-  // Handles: "src/services/payment.ts:PaymentService.charge" → "PaymentService.charge"
-  const sep = symbolName.lastIndexOf('\\');
-  if (sep > 0) return symbolName.slice(sep + 1);
-  const dotSep = symbolName.lastIndexOf('.');
-  if (dotSep > 0) return symbolName.slice(dotSep + 1);
-  return symbolName;
+  // Strip namespace prefix: "App\\Services\\PaymentProcessor::charge" → "PaymentProcessor::charge"
+  const nsSep = symbolName.lastIndexOf('\\');
+  const s = nsSep >= 0 ? symbolName.slice(nsSep + 1) : symbolName;
+  // PHP/C++ class::method → method name only
+  const colonColon = s.indexOf('::');
+  if (colonColon >= 0) return s.slice(colonColon + 2);
+  // Dot-style class.method → method name only
+  const dotSep = s.lastIndexOf('.');
+  if (dotSep > 0) return s.slice(dotSep + 1);
+  return s;
 }
 
 /** Normalize file paths to forward slashes and relative form. */

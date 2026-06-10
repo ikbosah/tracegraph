@@ -242,7 +242,7 @@ describe('resolveEvent — confidence threshold', () => {
 });
 
 describe('resolveEvent — resultToStaticMeta', () => {
-  it('converts a result to StaticNodeMeta with all expected fields', () => {
+  it('converts a result to StaticNodeMeta with all expected fields', async () => {
     const { resultToStaticMeta } = await import('../src/resolver');
     const result = resolveEvent(
       { name: 'App\\Services\\PaymentProcessor::charge' },

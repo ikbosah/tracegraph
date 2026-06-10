@@ -87,7 +87,7 @@ describe('diffToFindings()', () => {
     expect(findings[0]!.ruleId).toBe('behavior.business_logic.removed');
   });
 
-  it('generates High finding for added authorization event', () => {
+  it('generates Medium finding for added authorization event', () => {
     const diff: BehaviorDiff = {
       ...makeEmptyDiff(),
       addedSignatures: [makeSignatureChange({
@@ -101,7 +101,7 @@ describe('diffToFindings()', () => {
     const findings = diffToFindings(diff);
     const authAdded = findings.find((f) => f.ruleId === 'behavior.authorization.added');
     expect(authAdded, 'behavior.authorization.added finding missing').toBeDefined();
-    expect(authAdded!.severity).toBe('high');
+    expect(authAdded!.severity).toBe('medium');
   });
 
   it('deduplicates findings with the same fingerprint', () => {

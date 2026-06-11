@@ -865,8 +865,38 @@ mcpCmd
     // mcpStartCommand blocks — does not return until stdin is closed
   });
 
-// ── Parse (using tgArgv — TraceGraph flags only, no wrapped command args) ──
-program.parseAsync(['node', 'tracegraph', ...tgArgv]).catch((err: unknown) => {
+// ── EE extension loader ───────────────────────────────────────────────────────
+// Attempts to load @tracegraph-ee/core if installed. On failure, registers
+// stub commands that display an upgrade prompt. This keeps the MIT CLI fully
+// functional when EE packages are absent.
+
+const EE_STUBS: Array<{ name: string; desc: string }> = [
+  { name: 'contract',  desc: '[Enterprise] Verify runtime behaviour against architectural contracts' },
+  { name: 'prodready', desc: '[Enterprise] Generate a release gate report before deploying' },
+  { name: 'repair',    desc: '[Enterprise] Generate LLM-structured repair context for a finding' },
+  { name: 'triage',    desc: '[Enterprise] AI-assisted batch triage of open findings' },
+];
+
+async function main(): Promise<void> {
+  try {
+    const ee = await import('@tracegraph-ee/core');
+    ee.registerCommands(program);
+  } catch {
+    for (const { name, desc } of EE_STUBS) {
+      program.command(name).description(desc).allowUnknownOption()
+        .action(() => {
+          process.stderr.write(`\n  ${name} requires TraceGraph Enterprise.\n`);
+          process.stderr.write(`  Visit https://tracegraph.dev/enterprise\n\n`);
+          process.exit(2);
+        });
+    }
+  }
+
+  // ── Parse (using tgArgv — TraceGraph flags only, no wrapped command args) ──
+  await program.parseAsync(['node', 'tracegraph', ...tgArgv]);
+}
+
+main().catch((err: unknown) => {
   process.stderr.write(`[tracegraph] Unexpected error: ${String(err)}\n`);
   process.exit(EXIT_CODES.CLI_ERROR);
 });

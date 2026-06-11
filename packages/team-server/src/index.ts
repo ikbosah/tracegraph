@@ -24,7 +24,7 @@ import findingsRouter     from './api/findings';
 import suppressionsRouter from './api/suppressions';
 import projectsRouter     from './api/projects';
 import architectureRouter from './api/architecture';
-import { closeDb }        from './db/database';
+import { closeDb, getDb } from './db/database';
 
 const app  = express();
 const PORT = parseInt(process.env['PORT'] ?? '3000', 10);
@@ -51,6 +51,18 @@ app.use('/api/v1/projects/:projectId/baselines',    baselinesRouter);
 app.use('/api/v1/projects/:projectId/findings',     findingsRouter);
 app.use('/api/v1/projects/:projectId/suppressions', suppressionsRouter);
 app.use('/api/v1/projects/:projectId/architecture', architectureRouter);
+
+// ── EE server extension ───────────────────────────────────────────────────────
+// If @tracegraph-ee/server is installed, let it register additional routes.
+// The server starts regardless of whether the EE extension is present.
+
+try {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const ee = require('@tracegraph-ee/server') as { registerRoutes: (a: express.Application, db: unknown) => void };
+  ee.registerRoutes(app, getDb());
+} catch {
+  // EE server extension not installed — MIT-only mode
+}
 
 // ── Health check ──────────────────────────────────────────────────────────────
 
